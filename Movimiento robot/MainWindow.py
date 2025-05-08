@@ -11,18 +11,18 @@ from CoppeliaSimController import CoppeliaSimController
 import os
 import asyncio
 
-# Clase para manejar las operaciones asincrónicas con CoppeliaSim
 class CoppeliaSimWorker(QThread):
     connection_status = pyqtSignal(bool)
     progress_update = pyqtSignal(int)
-    operation_result = pyqtSignal(bool, str)  # Nuevo: Para informar sobre resultados de operaciones
+    operation_result = pyqtSignal(bool, str)  # Para informar sobre resultados de operaciones
+    cube_created = pyqtSignal(int, int, int)  # Nueva señal: (row, col, handle)
 
     def __init__(self, controller):
         super().__init__()
         self.controller = controller
         self.operation = None
         self.params = {}
-        self.loop = asyncio.new_event_loop()  # ← crea el loop aquí
+        self.loop = asyncio.new_event_loop()
 
     def set_task(self, operation, **params):
         self.operation = operation
@@ -47,18 +47,38 @@ class CoppeliaSimWorker(QThread):
         position = self.params.get('position', [0, 0, 0.05])
         size = self.params.get('size', [0.1, 0.1, 0.1])
         color = self.params.get('color', [1, 0, 0])
+        row = self.params.get('row')
+        col = self.params.get('col')
 
-        result = await self.controller.create_cuboid(size, position, color)
+        # Intentar crear el objeto en el floor (-1 es el parent por defecto, 0 para el floor)
+        result = await self.controller.create_cuboid(size, position, color, parent_handle=0)
+        
+        if result is not None:
+            # Emitir señal con fila, columna y handle del cubo creado
+            self.cube_created.emit(row, col, result)
+            self.operation_result.emit(True, f"Cubo creado con éxito (handle: {result})")
+        else:
+            self.operation_result.emit(False, "No se pudo crear el cubo")
+        
         return result
-
+    
     async def remove_cuboid_task(self):
         handle = self.params.get('handle')
+        row = self.params.get('row', None)
+        col = self.params.get('col', None)
+        
         if handle is None:
             self.operation_result.emit(False, "Handle no proporcionado")
             return False
         
         result = await self.controller.eliminar_cubo_por_handle(handle)
-        self.operation_result.emit(result, f"Cubo {handle} {'eliminado' if result else 'no eliminado'}")
+        
+        # Si hay información de fila y columna, emitir señal para actualizar el registro
+        if row is not None and col is not None:
+            self.operation_result.emit(result, f"Cubo en ({row}, {col}) {'eliminado' if result else 'no eliminado'}")
+        else:
+            self.operation_result.emit(result, f"Cubo {handle} {'eliminado' if result else 'no eliminado'}")
+        
         return result
 
     async def remove_all_cuboids_task(self):
@@ -120,26 +140,57 @@ class MainWindow(QWidget):
         self.sim_worker = CoppeliaSimWorker(self.sim_controller)
         self.sim_worker.connection_status.connect(self.update_connection_status_ui)
         self.sim_worker.progress_update.connect(self.update_progress_bar)
-        self.sim_worker = CoppeliaSimWorker(self.sim_controller)
-        self.sim_worker.connection_status.connect(self.update_connection_status_ui)
-        self.sim_worker.progress_update.connect(self.update_progress_bar)
-        self.sim_worker.operation_result.connect(self.handle_operation_result)  # Nueva conexión
+        self.sim_worker.operation_result.connect(self.handle_operation_result)
+        # Conectar la señal de cubo creado para actualizar el handle
+        self.sim_worker.cube_created.connect(self.update_cube_handle)
 
         self.progress_update.connect(self.update_progress_bar)
         self.connection_status_update.connect(self.update_connection_status_ui)
 
         self.setup_ui()
-        self.cube_handles = {}
+        self.cube_handles = {}  # Diccionario para asociar posiciones (row, col) con handles
         self.connect_signals()
-
+    
     def handle_operation_result(self, success, message):
-        """Maneja los resultados de operaciones asíncronas de CoppeliaSim"""
+        """Maneja los resultados de operaciones asíncronas"""
         self.progress_bar.setVisible(False)
         if success:
-            print(f"✅ Operación exitosa: {message}")
+            print(f"✅ {message}")
         else:
-            print(f"❌ Error en operación: {message}")
-            QMessageBox.warning(self, "Error en operación", message)
+            print(f"❌ {message}")
+            #QMessageBox.warning(self, "Error en operación", message)
+
+    def update_cube_handle(self, row, col, handle):
+        """Actualiza el diccionario de handles cuando se crea un cubo"""
+        print(f"✅ Actualizando handle para cubo en ({row}, {col}): {handle}")
+        self.cube_handles[(row, col)] = handle
+        self.progress_bar.setVisible(False)
+
+    def eliminar_cubo_en_posicion(self, row, col):
+        """Elimina un cubo específico por su posición en la cuadrícula"""
+        if not self.is_connected:
+            QMessageBox.warning(self, "No conectado", "Conéctate a CoppeliaSim antes de eliminar obstáculos.")
+            return
+        
+        handle = self.cube_handles.get((row, col))
+        if handle is None:
+            print(f"⚠️ No se encontró handle para la posición ({row}, {col})")
+            return
+        
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setValue(25)
+        self.sim_worker.set_task('remove_cuboid', handle=handle, row=row, col=col)
+        self.sim_worker.start()
+        
+        # Eliminamos el handle después de que se complete la operación para evitar eliminar antes de tiempo
+        # Esto se hará cuando la operación sea exitosa en el worker
+
+    def update_cube_removal_status(self, row, col, success):
+        """Actualiza el estado después de eliminar un cubo"""
+        if success and (row, col) in self.cube_handles:
+            del self.cube_handles[(row, col)]
+            print(f"✅ Handle para cubo en ({row}, {col}) eliminado del registro")
+        self.progress_bar.setVisible(False)
 
     def setup_ui(self):
         layout = QVBoxLayout()
@@ -238,7 +289,7 @@ class MainWindow(QWidget):
         cell_size = float(self.scale_combo.currentText())
         x = col * cell_size
         y = -row * cell_size
-        z = 0.2
+        z = 0.05  # Altura reducida para que esté en el suelo
 
         size = [cell_size * 0.8, cell_size * 0.8, 0.1]
         position = [x, y, z]
@@ -247,10 +298,8 @@ class MainWindow(QWidget):
         self.progress_bar.setVisible(True)
         self.progress_bar.setValue(50)
         
-        # Almacenar la posición para actualizar el handle cuando se complete
-        self.pending_position = (row, col)
-        
-        self.sim_worker.set_task('create_cuboid', position=position, size=size, color=color)
+        # Pasar fila y columna como parámetros para poder actualizar el handle después
+        self.sim_worker.set_task('create_cuboid', position=position, size=size, color=color, row=row, col=col)
         self.sim_worker.start()
 
     def agregar_obstaculo_coppelia(self):
@@ -327,12 +376,14 @@ class MainWindow(QWidget):
         self.set_mode('path')
 
     def reset_grid(self):
+        # Primero eliminar los cubos en CoppeliaSim si estamos conectados
+        if self.is_connected and self.cube_handles:
+            self.eliminar_cubos_en_coppelia()
+        
+        # Después resetear la cuadrícula
         self.grid_manager = GridManager()
         self.grid_widget.grid_manager = self.grid_manager
         self.grid_widget.update()
-
-        if self.is_connected:
-            self.eliminar_cubos_en_coppelia()
 
     def save_grid(self):
         filename, _ = QFileDialog.getSaveFileName(self, "Guardar Recorrido", "", "CSV Files (*.csv)")
@@ -354,9 +405,17 @@ class MainWindow(QWidget):
             elif self.grid_widget.mode == 'path':
                 self.grid_manager.add_path(row, col)
             elif self.grid_widget.mode == 'obstacle':
-                self.grid_manager.add_obstacle(row, col)
-                if self.is_connected:
-                    self.agregar_cubo_en_posicion(row, col)
+                # Verificar si ya existe un obstáculo en esta posición
+                if self.grid_manager.grid[row][col] == OBSTACLE:
+                    # Si existe, eliminarlo
+                    if (row, col) in self.cube_handles and self.is_connected:
+                        self.eliminar_cubo_en_posicion(row, col)
+                    self.grid_manager.grid[row][col] = EMPTY
+                else:
+                    # Si no existe, agregarlo
+                    self.grid_manager.add_obstacle(row, col)
+                    if self.is_connected:
+                        self.agregar_cubo_en_posicion(row, col)
 
             self.grid_widget.update()
 
@@ -371,24 +430,5 @@ class MainWindow(QWidget):
         self.sim_worker.set_task('remove_all_cuboids')
         self.sim_worker.start()
 
+        # Limpiar el diccionario de handles
         self.cube_handles = {}
-
-    def eliminar_cubo_en_posicion(self, row, col):
-        """Elimina un cubo específico por su posición en la cuadrícula"""
-        if not self.is_connected:
-            QMessageBox.warning(self, "No conectado", "Conéctate a CoppeliaSim antes de eliminar obstáculos.")
-            return
-        
-        handle = self.cube_handles.get((row, col))
-        if handle is None:
-            print(f"⚠️ No se encontró handle para la posición ({row}, {col})")
-            return
-        
-        self.progress_bar.setVisible(True)
-        self.progress_bar.setValue(25)
-        self.sim_worker.set_task('remove_cuboid', handle=handle)
-        self.sim_worker.start()
-        
-        # Eliminar el handle del registro cuando se elimina el cubo específico
-        if (row, col) in self.cube_handles:
-            del self.cube_handles[(row, col)]
