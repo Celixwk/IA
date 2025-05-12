@@ -1,106 +1,77 @@
-import websockets
-import asyncio
-import json
+from coppeliasim_zmqremoteapi_client import RemoteAPIClient
 
 class CoppeliaSimController:
-    def __init__(self, uri="ws://127.0.0.1:23050"):
-        self.uri = uri
-        self.websocket = None
+    def __init__(self, host="localhost", port=23000):
+        self.host = host
+        self.port = port
+        self.client = None
+        self.sim = None
         self.connected = False
         self.created_cubes = []  # Lista para rastrear los handles de cubos creados
-        self.floor_handle = None  # Handle del objeto floor (escenario)
     
-    async def connect(self):
-        """Establece conexión con CoppeliaSim"""
+    def connect(self):
+        """Establece conexión con CoppeliaSim usando ZeroMQ"""
         try:
-            self.websocket = await websockets.connect(self.uri)
+            # Usar el cliente de API remota ZeroMQ
+            self.client = RemoteAPIClient(host=self.host, port=self.port)
+            self.sim = self.client.getObject('sim')
+            
+            # Verificar que podemos acceder a CoppeliaSim obteniendo el estado de simulación
+            state = self.sim.getSimulationState()
             self.connected = True
-            print("✅ Conectado a CoppeliaSim usando WebSocket")
+            print(f"Conectado a CoppeliaSim usando ZeroMQ. Estado de simulación: {state}")
             
             # Verificar comandos disponibles
-            methods = await self.get_available_methods()
-            print(f"ℹ️ Disponibles {len(methods)} métodos")
-            
-            # Buscar el handle del floor
-            await self.find_floor_handle()
-            
+            try:
+                sim_time = self.sim.getSimulationTime()
+                print(f"Tiempo de simulación actual: {sim_time}")
+            except Exception as e:
+                print(f"Advertencia: No se pudo verificar algunos comandos: {e}")
+                
             return True
         except Exception as e:
-            print(f"❌ Error de conexión: {e}")
+            print(f"Error de conexión ZeroMQ: {e}")
             self.connected = False
             return False
     
-    async def find_floor_handle(self):
-        """Encuentra el handle del objeto floor en la escena"""
+    def crear_cubo(self, x=0.0, y=0.0, z=0.2):
+        """Crea un cubo en la posición especificada"""
+        if not self.connected:
+            raise Exception("No hay conexión activa con CoppeliaSim.")
+
+        print(f"📦 Creando cubo en: {x}, {y}, {z}")
+
         try:
-            # Obtener todos los objetos en la escena y buscar uno que se llame "Floor" o similar
-            response = await self.send_request("sim.getObjectsInScene")
-            data = json.loads(response)
+            # Crear el cubo usando la API de ZeroMQ
+            cubo_handle = self.sim.createPrimitiveShape(0, 0, [0.2, 0.2, 0.2])  # Tipo 0 = cubo
             
-            if data.get("success", False):
-                all_objects = data.get("result", [])
-                
-                # Primero intentar obtener directamente por nombre
-                for possible_name in ["/Floor", "Floor", "floor", "/floor"]:
-                    try:
-                        response = await self.send_request("sim.getObjectHandle", possible_name)
-                        name_data = json.loads(response)
-                        if name_data.get("success", False):
-                            self.floor_handle = name_data.get("result")
-                            print(f"✅ Handle del floor encontrado: {self.floor_handle}")
-                            return
-                    except:
-                        pass
-                
-                # Si no funciona, verificar todos los objetos y buscar por tipo
-                for obj_handle in all_objects:
-                    # Intentar obtener el nombre del objeto
-                    name_response = await self.send_request("sim.getObjectName", obj_handle, True)  # True para incluir ruta completa
-                    name_data = json.loads(name_response)
-                    
-                    if name_data.get("success", False):
-                        name = name_data.get("result", "")
-                        if "floor" in name.lower() or "plane" in name.lower():
-                            self.floor_handle = obj_handle
-                            print(f"✅ Handle del floor encontrado por nombre: {self.floor_handle} ({name})")
-                            return
-                    
-                    # Verificar tipo de objeto (8 es plano, que podría ser un floor)
-                    type_response = await self.send_request("sim.getObjectType", obj_handle)
-                    type_data = json.loads(type_response)
-                    
-                    if type_data.get("success", False) and type_data.get("result") == 8:
-                        # Si es un plano, verificar su posición (los floors suelen estar en Y=0)
-                        pos_response = await self.send_request("sim.getObjectPosition", obj_handle, -1)
-                        pos_data = json.loads(pos_response)
-                        
-                        if pos_data.get("success", False):
-                            position = pos_data.get("result", [0, 0, 0])
-                            if abs(position[2]) < 0.01:  # Si está cerca de z=0
-                                self.floor_handle = obj_handle
-                                print(f"✅ Handle del floor encontrado por tipo y posición: {self.floor_handle}")
-                                return
-                
-                # Si llegamos aquí, no se encontró el floor
-                print("⚠️ No se encontró el floor automáticamente, usando la escena como padre")
-                self.floor_handle = -1
-            else:
-                print("⚠️ No se pudo obtener objetos de la escena, usando la escena como padre")
-                self.floor_handle = -1
+            # Posicionar el cubo
+            self.sim.setObjectPosition(cubo_handle, -1, [x, y, z])
+            
+            # Registrar el cubo creado
+            self.created_cubes.append(cubo_handle)
+            print(f"✅ Cubo creado y posicionado con handle: {cubo_handle}")
+            return cubo_handle
         except Exception as e:
-            print(f"❌ Error al buscar floor handle: {e}")
-            self.floor_handle = -1  # Usar escena como padre por defecto
-    
-    async def disconnect(self):
+            print(f"❌ Error al crear cubo: {e}")
+            return None
+
+    def disconnect(self):
         """Cierra la conexión con CoppeliaSim"""
-        if self.connected and self.websocket:
-            await self.websocket.close()
-            self.connected = False
-            print("ℹ️ Desconectado de CoppeliaSim")
-            return True
+        if self.connected:
+            try:
+                # ZeroMQ no requiere cerrar la conexión explícitamente
+                self.sim = None
+                self.client = None
+                self.connected = False
+                print("Desconectado de CoppeliaSim")
+                return True
+            except Exception as e:
+                print(f"Error al desconectar: {e}")
+                return False
         return False
     
-    async def eliminar_cubos(self):
+    def eliminar_cubos(self):
         """Elimina todos los cubos que fueron creados por esta instancia"""
         if not self.connected:
             print("❌ No se puede eliminar cubos: no hay conexión activa")
@@ -110,517 +81,381 @@ class CoppeliaSimController:
             print("ℹ️ No hay cubos registrados para eliminar")
             return True
         
-        # Intentar primero eliminar todos los cubos de una vez
-        try:
-            print(f"🔄 Intentando eliminar {len(self.created_cubes)} cubos de una vez")
-            # Verificar primero cuáles cubos existen realmente
-            existing_cubes = []
-            for handle in self.created_cubes:
-                try:
-                    check_response = await self.send_request("sim.getObjectType", handle)
-                    check_data = json.loads(check_response)
-                    if check_data.get("success", False):
-                        existing_cubes.append(handle)
-                except:
-                    pass  # Si hay error, no incluir el handle
-            
-            if existing_cubes:
-                # Intentar eliminar todos los objetos en un solo comando
-                response = await self.send_request("sim.removeObjects", existing_cubes)
-                data = json.loads(response)
-                
-                if data.get("success", False):
-                    print(f"✅ Eliminados {len(existing_cubes)} cubos exitosamente")
-                    self.created_cubes = []  # Limpiar lista de cubos
-                    return True
-                else:
-                    print(f"⚠️ No se pudieron eliminar todos los cubos de una vez: {data.get('error', '')}")
-            else:
-                print("ℹ️ No hay cubos existentes para eliminar")
-                self.created_cubes = []  # Limpiar lista de cubos
-                return True
-        except Exception as e:
-            print(f"❌ Error al eliminar cubos en lote: {e}")
-        
-        # Si el método anterior falla, intentar eliminar uno por uno
         count = 0
-        cubos_a_eliminar = self.created_cubes.copy()  # Trabajar con una copia
+        cubos_a_eliminar = self.created_cubes.copy()  # Trabajar con una copia para evitar problemas al modificar durante la iteración
         
         for handle in cubos_a_eliminar:
-            if await self.eliminar_cubo_por_handle(handle):
+            try:
+                print(f"Intentando eliminar cubo con handle: {handle}")
+                self.sim.removeObject(handle)
+                
+                if handle in self.created_cubes:
+                    self.created_cubes.remove(handle)
                 count += 1
+                print(f"✅ Cubo {handle} eliminado correctamente")
+            except Exception as e:
+                print(f"❌ Error al eliminar cubo {handle}: {e}")
         
         print(f"🧹 Se eliminaron {count} cubos de {len(cubos_a_eliminar)} intentados")
-        
-        # Si se eliminaron todos o no había ninguno, limpiar la lista
-        if count == len(cubos_a_eliminar) or len(cubos_a_eliminar) == 0:
-            self.created_cubes = []
-            
-        return count > 0 or len(cubos_a_eliminar) == 0
+        return count > 0
     
-    async def eliminar_cubo_por_handle(self, handle):
+    def eliminar_cubo_por_handle(self, handle):
         """Elimina un cubo específico por su handle"""
         if not self.connected:
-            print(f"❌ No se puede eliminar el cubo {handle}: no hay conexión activa")
-            return False
-        
-        # Verificar que el handle no sea None
-        if handle is None:
-            print("❌ No se puede eliminar el cubo: handle es None")
+            print("❌ No se puede eliminar el cubo: no hay conexión activa")
             return False
 
         try:
-            # Verificar primero si el objeto existe
-            check_response = await self.send_request("sim.getObjectType", handle)
-            check_data = json.loads(check_response)
+            print(f"Intentando eliminar cubo con handle: {handle}")
+            self.sim.removeObject(handle)
             
-            if not check_data.get("success", False):
-                # El objeto ya no existe
-                if handle in self.created_cubes:
-                    self.created_cubes.remove(handle)
-                print(f"⚠️ El objeto con handle {handle} ya no existe en la escena")
-                return True
-            
-            # Intentar eliminar usando removeObjects (plural, más confiable)
-            response = await self.send_request("sim.removeObjects", [handle], 1)  # 1 para eliminar de forma asíncrona
-            data = json.loads(response)
-            
-            if data.get("success", False):
-                if handle in self.created_cubes:
-                    self.created_cubes.remove(handle)
-                print(f"✅ Cubo con handle {handle} eliminado exitosamente")
-                return True
-            else:
-                # Intentar con removeObject (singular)
-                alt_response = await self.send_request("sim.removeObject", handle, 1)  # 1 para eliminar de forma asíncrona
-                alt_data = json.loads(alt_response)
-                
-                if alt_data.get("success", False):
-                    if handle in self.created_cubes:
-                        self.created_cubes.remove(handle)
-                    print(f"✅ Cubo con handle {handle} eliminado con removeObject")
-                    return True
-                else:
-                    # Un último intento: deleteObject (método directo)
-                    delete_response = await self.send_request("sim.deleteObject", handle)
-                    delete_data = json.loads(delete_response)
-                    
-                    if delete_data.get("success", False):
-                        if handle in self.created_cubes:
-                            self.created_cubes.remove(handle)
-                        print(f"✅ Cubo con handle {handle} eliminado con deleteObject")
-                        return True
-                    
-                    # Si todo lo anterior falla, intentar ocultar el objeto
-                    visible_response = await self.send_request("sim.setObjectInt32Parameter", handle, 10, 0)
-                    visible_data = json.loads(visible_response)
-                    
-                    if visible_data.get("success", False):
-                        if handle in self.created_cubes:
-                            self.created_cubes.remove(handle)
-                        print(f"✅ Cubo con handle {handle} ocultado (no pudo ser eliminado)")
-                        return True
-                    
-                    print(f"❌ Error al eliminar cubo con handle {handle}: {data.get('error', '')}")
-                    return False
+            if handle in self.created_cubes:
+                self.created_cubes.remove(handle)
+            print(f"✅ Cubo con handle {handle} eliminado exitosamente")
+            return True
         except Exception as e:
             print(f"❌ Excepción al eliminar cubo con handle {handle}: {e}")
             return False
     
-    async def get_available_methods(self):
-        """Obtiene los métodos disponibles en la API de CoppeliaSim"""
+    def get_available_methods(self):
+        """Obtiene una lista aproximada de métodos disponibles en ZeroMQ API"""
         if not self.connected:
-            print("❌ No hay conexión activa")
+            print("No hay conexión activa")
             return []
         
-        try:
-            response = await self.send_request("meta")
-            try:
-                meta_data = json.loads(response)
-                return meta_data.get("methods", [])
-            except json.JSONDecodeError:
-                print(f"❌ Error al decodificar respuesta JSON: {response}")
-                return []
-        except Exception as e:
-            print(f"❌ Error al obtener métodos disponibles: {e}")
-            return []
+        # ZeroMQ no proporciona un método para enumerar todos los métodos disponibles
+        # Devolvemos una lista predefinida de métodos comunes como referencia
+        common_methods = [
+            "sim.startSimulation", 
+            "sim.stopSimulation", 
+            "sim.pauseSimulation",
+            "sim.getSimulationState", 
+            "sim.createPrimitiveShape",
+            "sim.removeObject",
+            "sim.setObjectPosition",
+            "sim.setShapeColor"
+        ]
+        return common_methods
     
-    async def send_request(self, function_name, *args):
-        """Envía un comando a CoppeliaSim"""
-        if not self.connected:
-            print("❌ No hay conexión activa")
-            return json.dumps({"success": False, "error": "No hay conexión activa"})
-            
-        request = {
-            "func": function_name,
-            "args": list(args)
-        }
-        
-        request_json = json.dumps(request)
-        print(f"📤 Enviando: {request_json}")
-        
-        try:
-            await self.websocket.send(request_json)
-            response = await self.websocket.recv()
-            print(f"📥 Respuesta recibida: {response}")
-            return response
-        except Exception as e:
-            print(f"❌ Error al enviar/recibir solicitud: {e}")
-            self.connected = False  # Marcar como desconectado en caso de error
-            return json.dumps({"success": False, "error": str(e)})
-    
-    async def test_connection(self):
-        """Prueba la conexión realizando una consulta simple"""
-        if not self.connected:
-            print("❌ No hay conexión activa para probar")
-            return False
-        
-        try:
-            # Intentar obtener la versión de CoppeliaSim
-            response = await self.send_request("sim.getInt32Parameter", 0)
-            data = json.loads(response)
-            
-            return data.get("success", False)
-        except Exception as e:
-            print(f"❌ Error al probar conexión: {e}")
-            return False
-    
-    async def start_simulation(self):
+    def start_simulation(self):
         """Inicia la simulación en CoppeliaSim"""
         if not self.connected:
-            print("❌ No hay conexión activa. No se puede iniciar la simulación.")
-            return False
-
-        response = await self.send_request("sim.startSimulation")
-        
-        if response is None:
-            print("❌ No se recibió respuesta al intentar iniciar simulación.")
+            print("No hay conexión activa. No se puede iniciar la simulación.")
             return False
 
         try:
-            response_data = json.loads(response)
-            success = response_data.get("success", False)
-            if success:
-                print("✅ Simulación iniciada correctamente")
-            else:
-                print(f"❌ Error al iniciar simulación: {response_data.get('error', 'Razón desconocida')}")
-            return success
-        except json.JSONDecodeError:
-            print(f"❌ Error al interpretar respuesta: {response}")
+            self.sim.startSimulation()
+            print("✅ Simulación iniciada correctamente")
+            return True
+        except Exception as e:
+            print(f"❌ Error al iniciar simulación: {e}")
             return False
     
-    async def stop_simulation(self):
+    def stop_simulation(self):
         """Detiene la simulación en CoppeliaSim"""
-        if not self.connected:
-            print("❌ No hay conexión activa. No se puede detener la simulación.")
+        try:
+            self.sim.stopSimulation()
+            print("✅ Simulación detenida correctamente")
+            return True
+        except Exception as e:
+            print(f"❌ Error al detener simulación: {e}")
             return False
+    
+    def create_cuboid(self, size=[0.1, 0.1, 0.1], position=[0, 0, 0.05], color=None):
+        """Crea un cuboide en la escena de CoppeliaSim"""
+        if not self.connected:
+            print("No se puede crear cuboide: no hay conexión activa")
+            return None
             
-        response = await self.send_request("sim.stopSimulation")
+        print(f"Intentando crear cuboide - Tamaño: {size}, Posición: {position}")
         
-        if response is None:
-            print("❌ No se recibió respuesta al intentar detener simulación.")
+        try:
+            # Crear forma con ZeroMQ API
+            object_handle = self.sim.createPrimitiveShape(0, 0, size)  # 0 = cubo
+            print(f"Objeto creado con éxito. Handle: {object_handle}")
+            
+            # Establecer la posición del objeto
+            print(f"Estableciendo posición: {position}")
+            self.sim.setObjectPosition(object_handle, -1, position)
+            
+            # Intentar establecer el color si se especifica
+            if color:
+                try:
+                    print(f"Estableciendo color: {color}")
+                    self.sim.setShapeColor(object_handle, None, 0, color)
+                except Exception as color_error:
+                    print(f"Error al establecer color: {color_error}")
+            
+            # Registrar el handle del cubo creado
+            if object_handle is not None:
+                self.created_cubes.append(object_handle)
+                print(f"Cubo registrado con handle: {object_handle}")
+            
+            return object_handle
+            
+        except Exception as e:
+            print(f"Error general al crear objeto: {e}")
+            # Intento alternativo en caso de error
+            try:
+                # Alternativa usando createPureShape
+                print("Intentando método alternativo...")
+                object_handle = self.sim.createPureShape(0, 8, size, 1, None)
+                
+                # Posicionar el objeto
+                self.sim.setObjectPosition(object_handle, -1, position)
+                
+                # Registrar handle
+                self.created_cubes.append(object_handle)
+                return object_handle
+            except Exception as e2:
+                print(f"Error en método alternativo: {e2}")
+                return None
+    
+    def test_connection(self):
+        """Prueba la conexión enviando una solicitud simple"""
+        if not self.connected:
             return False
             
         try:
-            response_data = json.loads(response)
-            success = response_data.get("success", False)
-            if success:
-                print("✅ Simulación detenida correctamente")
-            else:
-                print(f"❌ Error al detener simulación: {response_data.get('error', 'Razón desconocida')}")
-            return success
-        except json.JSONDecodeError:
-            print(f"❌ Error al interpretar respuesta: {response}")
+            state = self.sim.getSimulationState()
+            print(f"Conexión OK. Estado de simulación: {state}")
+            return True
+        except Exception as e:
+            print(f"Error al probar conexión: {e}")
+            self.connected = False
             return False
-    
-    async def reset_simulation(self):
-        """Resetea la simulación en CoppeliaSim"""
-        if not self.connected:
-            print("❌ No hay conexión activa. No se puede resetear la simulación.")
-            return False
-            
-        # Primero asegurarnos de que la simulación está detenida
-        await self.stop_simulation()
         
-        # Eliminar todos los cubos creados
-        await self.eliminar_cubos()
-        
-        # Resetear la simulación
-        response = await self.send_request("sim.resetSimulation")
-        
-        if response is None:
-            print("❌ No se recibió respuesta al intentar resetear simulación.")
-            return False
-            
-        try:
-            response_data = json.loads(response)
-            success = response_data.get("success", False)
-            if success:
-                print("✅ Simulación reseteada correctamente")
-                self.created_cubes = []  # Limpiar la lista de cubos ya que la simulación ha sido reseteada
-            else:
-                print(f"❌ Error al resetear simulación: {response_data.get('error', 'Razón desconocida')}")
-            return success
-        except json.JSONDecodeError:
-            print(f"❌ Error al interpretar respuesta: {response}")
-            return False
-    
-    async def create_cuboid(self, size=[0.1, 0.1, 0.1], position=[0, 0, 0.05], color=[1, 0, 0], parent_handle=None):
+    def create_robot(self, robot_type, position, orientation=None):
         """
-        Crea un cuboide en la escena de CoppeliaSim
+        Crea un robot en CoppeliaSim cargando el modelo desde la biblioteca de modelos
+        """
+        if not self.connected:
+            print("❌ No se puede crear robot: no hay conexión activa")
+            return {"success": False, "error": "No hay conexión activa"}
+        
+        try:
+            print(f"Intentando cargar el modelo del robot {robot_type} en posición {position}")
+            
+            # Intentar varias rutas posibles para encontrar el modelo
+            possible_paths = [
+                "models/robots/mobile/pioneer p3dx.ttm",
+                "models/mobile/pioneer p3dx.ttm",
+                "models/robots/Pioneer_p3dx.ttm",
+                "models/robots/mobile/Pioneer_p3dx.ttm"
+            ]
+            
+            # Probar cada ruta hasta encontrar una que funcione
+            robot_handle = None
+            for path in possible_paths:
+                try:
+                    print(f"Intentando cargar modelo desde: {path}")
+                    # La función loadModel puede retornar un handle o una lista de handles
+                    result = self.sim.loadModel(path)
+                    
+                    # Manejar ambos casos (int o lista)
+                    if isinstance(result, list) and len(result) > 0:
+                        robot_handle = result[0]
+                    elif isinstance(result, int):
+                        robot_handle = result
+                    
+                    if robot_handle is not None:
+                        print(f"✅ Modelo cargado correctamente desde: {path} con handle: {robot_handle}")
+                        break
+                except Exception as path_error:
+                    print(f"No se pudo cargar desde {path}: {path_error}")
+            
+            # Si no se pudo cargar el modelo, intentar otra estrategia
+            if robot_handle is None:
+                # Intentar usar una API alternativa para encontrar el modelo pioneer
+                try:
+                    print("Intentando estrategia alternativa para encontrar el robot...")
+                    # En algunas versiones, podemos buscar objetos por nombre
+                    all_objects = self.sim.getObjects()
+                    for obj in all_objects:
+                        try:
+                            name = self.sim.getObjectName(obj)
+                            if "pioneer" in name.lower() or "p3dx" in name.lower():
+                                print(f"Encontrado objeto existente: {name} con handle {obj}")
+                                # Clonar el objeto existente
+                                robot_handle = self.sim.copyObject(obj, -1, 0)
+                                print(f"Robot clonado con handle: {robot_handle}")
+                                break
+                        except:
+                            continue
+                except Exception as e:
+                    print(f"Error en estrategia alternativa: {e}")
+            
+            # Si aún no se ha encontrado un robot, intentar crear uno directamente
+            if robot_handle is None:
+                print("No se pudo cargar el modelo. Intentando crear un objeto simple...")
+                try:
+                    # Crear un objeto simple como fallback
+                    # Primero intentar con createPureShape
+                    robot_handle = self.sim.createPureShape(0, 16, [0.2, 0.3, 0.1], 1, None)
+                    print(f"Objeto simple creado con handle: {robot_handle}")
+                except Exception as e:
+                    print(f"Error creando objeto simple: {e}")
+                    return {"success": False, "error": "No se pudo crear ninguna representación del robot"}
+            
+            # Si llegamos aquí, tenemos un handle de robot. Ahora posicionarlo.
+            print(f"Estableciendo posición del robot a: {position}")
+            
+            # Intentar varias formas de establecer la posición
+            try:
+                # Método 1: Establecer posición directamente
+                self.sim.setObjectPosition(robot_handle, -1, position)
+                print("Posición establecida usando setObjectPosition")
+            except Exception as e1:
+                print(f"Error con setObjectPosition: {e1}")
+                try:
+                    # Método 2: Establecer matriz de posición/orientación
+                    # Crear una matriz de transformación simple (solo translación)
+                    matrix = [
+                        1, 0, 0, position[0],
+                        0, 1, 0, position[1],
+                        0, 0, 1, position[2],
+                        0, 0, 0, 1
+                    ]
+                    self.sim.setObjectMatrix(robot_handle, -1, matrix)
+                    print("Posición establecida usando setObjectMatrix")
+                except Exception as e2:
+                    print(f"Error con setObjectMatrix: {e2}")
+                    try:
+                        # Método 3: Establecer pose
+                        pose = position + [0, 0, 0]  # posición + orientación
+                        self.sim.setObjectPose(robot_handle, -1, pose)
+                        print("Posición establecida usando setObjectPose")
+                    except Exception as e3:
+                        print(f"Error con setObjectPose: {e3}")
+                        print("ADVERTENCIA: No se pudo posicionar el robot correctamente")
+            
+            # Verificar la posición actual
+            try:
+                current_pos = self.sim.getObjectPosition(robot_handle, -1)
+                print(f"Posición actual del robot: {current_pos}")
+            except:
+                print("No se pudo obtener la posición actual")
+            
+            # Si orientación se proporciona, establecerla
+            if orientation:
+                try:
+                    self.sim.setObjectOrientation(robot_handle, -1, orientation)
+                    print(f"Orientación establecida: {orientation}")
+                except Exception as e:
+                    print(f"Error al establecer orientación: {e}")
+            
+            print(f"✅ Robot creado/posicionado con handle: {robot_handle}")
+            return {
+                "success": True,
+                "handle": robot_handle
+            }
+            
+        except Exception as e:
+            print(f"❌ Error general al crear robot: {e}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+
+        
+    def createDummy(self, size=0.01):
+        """
+        Crea un dummy (punto de referencia) en CoppeliaSim
         
         Args:
-            size: Tamaño del cuboide [x, y, z]
-            position: Posición del cuboide [x, y, z]
-            color: Color del cuboide [r, g, b] (0-1)
-            parent_handle: Handle del objeto padre (0 para el floor, -1 para la escena)
+            size (float): Tamaño del dummy
         
         Returns:
-            Handle del objeto creado o None si falla
+            int o None: Handle del dummy creado o None si hay error
         """
         if not self.connected:
-            print("❌ No se puede crear cuboide: no hay conexión activa")
+            print("❌ No se puede crear dummy: no hay conexión activa")
             return None
         
-        # Si no se especifica un padre, usar el floor si está disponible
-        if parent_handle is None:
-            parent_handle = self.floor_handle if self.floor_handle is not None else -1
-            
-        print(f"🔄 Intentando crear cuboide - Tamaño: {size}, Posición: {position}, Color: {color}, Parent: {parent_handle}")
+        try:
+            # Intentar crear dummy
+            dummy_handle = self.sim.createDummy(size)
+            return dummy_handle
+        except Exception as e:
+            print(f"⚠️ Error al crear dummy: {e}")
+            return None
+
+    def setObjectAlias(self, handle, alias):
+        """
+        Establece un alias (nombre) para un objeto en CoppeliaSim
         
-        # Intentar métodos diferentes en orden
-        methods_to_try = [
-            self._create_cuboid_with_createPureShape,  # Método más simple y directo
-            self._create_cuboid_with_primitiveShape,   # Método alternativo
-            self._create_cuboid_with_meshShape         # Método más complejo pero flexible
-        ]
+        Args:
+            handle (int): Handle del objeto
+            alias (str): Nombre a asignar
         
-        for method in methods_to_try:
+        Returns:
+            bool: True si se pudo establecer el alias, False en caso contrario
+        """
+        if not self.connected:
+            print("❌ No se puede establecer alias: no hay conexión activa")
+            return False
+        
+        try:
+            # Intentar establecer el alias/nombre
+            # Nota: Algunas versiones de CoppeliaSim usan setObjectName en lugar de setObjectAlias
             try:
-                result = await method(size, position, color, parent_handle)
-                if result is not None:
-                    # Asegurarnos de que el resultado es un entero válido antes de devolverlo
-                    if isinstance(result, (int, float)) and result >= 0:
-                        return int(result)  # Convertir a entero para asegurar compatibilidad
-                    print(f"⚠️ El método devolvió un resultado no válido: {result}")
-            except Exception as e:
-                print(f"⚠️ Método de creación falló: {e}")
+                self.sim.setObjectAlias(handle, alias)
+            except:
+                # Intentar con setObjectName si setObjectAlias no está disponible
+                try:
+                    self.sim.setObjectName(handle, alias)
+                except:
+                    print("⚠️ No se pudo establecer el nombre del objeto")
+                    return False
+            return True
+        except Exception as e:
+            print(f"⚠️ Error al establecer alias: {e}")
+            return False
+
+    def remove_robot(self, handle):
+        """
+        Elimina un robot de CoppeliaSim
         
-        print("❌ Todos los métodos de creación fallaron")
-        return None
-    
-    async def _create_cuboid_with_createPureShape(self, size, position, color, parent_handle):
+        Args:
+            handle (int): Handle del robot a eliminar
+        
+        Returns:
+            dict: Información sobre el resultado de la operación
         """
-        Método 1: Usar createPureShape - el método más simple y directo
-        """
+        if not self.connected:
+            print("❌ No se puede eliminar robot: no hay conexión activa")
+            return {
+                "success": False,
+                "error": "No hay conexión con CoppeliaSim"
+            }
+        
         try:
-            # Crear el objeto usando createPureShape
-            response = await self.send_request("sim.createPureShape", 0, 8, size, 1, None)
-            data = json.loads(response)
+            print(f"Eliminando robot con handle: {handle}")
             
-            if not data.get("success", False):
-                print(f"⚠️ No se pudo crear forma pura: {data.get('error', '')}")
-                return None
+            # Verificar si el objeto existe
+            exists = False
+            try:
+                # Intentar obtener la posición para verificar si existe
+                self.sim.getObjectPosition(handle, -1)
+                exists = True
+            except:
+                print(f"⚠️ El objeto con handle {handle} no existe o ya fue eliminado")
+                return {
+                    "success": False,
+                    "error": f"El objeto con handle {handle} no existe"
+                }
             
-            handle = data.get("result")
-            
-            if handle is None or not isinstance(handle, (int, float)) or handle < 0:
-                print(f"⚠️ Handle recibido no es válido: {handle}")
-                return None
-            
-            # Establecer la posición
-            pos_response = await self.send_request("sim.setObjectPosition", handle, -1, position)
-            pos_data = json.loads(pos_response)
-            
-            if not pos_data.get("success", False):
-                print(f"⚠️ No se pudo establecer la posición: {pos_data.get('error', '')}")
-                await self.eliminar_cubo_por_handle(handle)
-                return None
-            
-            # Establecer el color usando los tres componentes posibles (ambiente, difuso, especular)
-            color_components = [0, 1, 2]  # 0=ambiente, 1=difuso, 2=especular
-            
-            for component in color_components:
-                try:
-                    # El formato correcto es: (handle, colorComponent, objectOption, rgbData)
-                    color_response = await self.send_request("sim.setShapeColor", handle, component, 0, color)
-                    color_data = json.loads(color_response)
-                    
-                    if not color_data.get("success", False):
-                        print(f"⚠️ No se pudo establecer el color componente {component}: {color_data.get('error', '')}")
-                except Exception as e:
-                    print(f"⚠️ Error al establecer color componente {component}: {e}")
-            
-            # Establecer el padre si es diferente de -1 (escena)
-            if parent_handle != -1:
-                try:
-                    # Verificar que el handle del padre exista
-                    parent_check_response = await self.send_request("sim.getObjectType", parent_handle)
-                    parent_check_data = json.loads(parent_check_response)
-                    
-                    if parent_check_data.get("success", False):
-                        parent_response = await self.send_request("sim.setObjectParent", handle, parent_handle, True)
-                        parent_data = json.loads(parent_response)
-                        
-                        if not parent_data.get("success", False):
-                            print(f"⚠️ No se pudo establecer el padre: {parent_data.get('error', '')}")
-                            # Intentar método alternativo
-                            try:
-                                await self.send_request("sim.setObjectParent", handle, parent_handle, False)
-                            except:
-                                pass
-                    else:
-                        print(f"⚠️ El handle del padre {parent_handle} no es válido")
-                except Exception as e:
-                    print(f"⚠️ Error al establecer padre: {e}")
-            
-            # Registramos el handle como creado exitosamente
-            print(f"✅ Cuboide creado exitosamente con handle: {handle}")
-            self.created_cubes.append(handle)
-            return handle
+            if exists:
+                # Eliminar el objeto - esto debería funcionar para cualquier objeto, incluyendo robots
+                self.sim.removeObject(handle)
+                print(f"✅ Robot con handle {handle} eliminado correctamente")
+                return {
+                    "success": True
+                }
             
         except Exception as e:
-            print(f"❌ Error al crear cuboide con createPureShape: {e}")
-            return None
-    
-    async def _create_cuboid_with_primitiveShape(self, size, position, color, parent_handle):
-        """
-        Método 2: Usar createPrimitiveShape - método alternativo
-        """
-        try:
-            # Crear cuboid primitiva (0=cuboid, 1=sphere, etc)
-            response = await self.send_request("sim.createPrimitiveShape", 0, size, 0)
-            data = json.loads(response)
-            
-            if not data.get("success", False):
-                print(f"⚠️ No se pudo crear primitiva: {data.get('error', '')}")
-                return None
-            
-            handle = data.get("result")
-            
-            if handle is None or not isinstance(handle, (int, float)) or handle < 0:
-                print(f"⚠️ Handle recibido no es válido: {handle}")
-                return None
-            
-            # Establecer la posición
-            pos_response = await self.send_request("sim.setObjectPosition", handle, -1, position)
-            pos_data = json.loads(pos_response)
-            
-            if not pos_data.get("success", False):
-                print(f"⚠️ No se pudo establecer la posición: {pos_data.get('error', '')}")
-                await self.eliminar_cubo_por_handle(handle)
-                return None
-            
-            # Establecer el color para todos los componentes disponibles
-            for component in [0, 1, 2]:  # ambiente, difuso, especular
-                try:
-                    await self.send_request("sim.setShapeColor", handle, component, 0, color)
-                except Exception as e:
-                    print(f"⚠️ Error al establecer color componente {component}: {e}")
-            
-            # Establecer el padre si es diferente de -1 (escena)
-            if parent_handle != -1:
-                try:
-                    # Verificar que el handle del padre exista
-                    parent_check_response = await self.send_request("sim.getObjectType", parent_handle)
-                    parent_check_data = json.loads(parent_check_response)
-                    
-                    if parent_check_data.get("success", False):
-                        await self.send_request("sim.setObjectParent", handle, parent_handle, True)
-                    else:
-                        print(f"⚠️ El handle del padre {parent_handle} no es válido")
-                except Exception as e:
-                    print(f"⚠️ Error al establecer padre: {e}")
-            
-            # Registramos el handle como creado exitosamente
-            print(f"✅ Cuboide creado exitosamente con handle: {handle}")
-            self.created_cubes.append(handle)
-            return handle
-            
-        except Exception as e:
-            print(f"❌ Error al crear cuboide con createPrimitiveShape: {e}")
-            return None
-    
-    async def _create_cuboid_with_meshShape(self, size, position, color, parent_handle):
-        """
-        Método 3: Usar createMeshShape - más complejo pero flexible
-        """
-        try:
-            # Crear vértices para un cubo
-            half_x = size[0]/2
-            half_y = size[1]/2
-            half_z = size[2]/2
-            
-            vertices = [
-                [-half_x, -half_y, -half_z],
-                [half_x, -half_y, -half_z],
-                [half_x, half_y, -half_z],
-                [-half_x, half_y, -half_z],
-                [-half_x, -half_y, half_z],
-                [half_x, -half_y, half_z],
-                [half_x, half_y, half_z],
-                [-half_x, half_y, half_z]
-            ]
-            
-            # Crear índices para las caras
-            indices = [
-                [0,1,2], [0,2,3],  # Base
-                [4,7,6], [4,6,5],  # Top
-                [0,4,5], [0,5,1],  # Lado 1
-                [1,5,6], [1,6,2],  # Lado 2
-                [2,6,7], [2,7,3],  # Lado 3
-                [3,7,4], [3,4,0]   # Lado 4
-            ]
-            
-            # Crear la forma
-            response = await self.send_request("sim.createMeshShape", 0, 0, vertices, indices)
-            data = json.loads(response)
-            
-            if not data.get("success", False):
-                print(f"⚠️ No se pudo crear forma mesh: {data.get('error', '')}")
-                return None
-            
-            handle = data.get("result")
-            
-            if handle is None or not isinstance(handle, (int, float)) or handle < 0:
-                print(f"⚠️ Handle recibido no es válido: {handle}")
-                return None
-            
-            # Establecer la posición
-            pos_response = await self.send_request("sim.setObjectPosition", handle, -1, position)
-            pos_data = json.loads(pos_response)
-            
-            if not pos_data.get("success", False):
-                print(f"⚠️ No se pudo establecer la posición: {pos_data.get('error', '')}")
-                await self.eliminar_cubo_por_handle(handle)
-                return None
-            
-            # Establecer el color para todos los componentes disponibles
-            for component in [0, 1, 2]:  # ambiente, difuso, especular
-                try:
-                    await self.send_request("sim.setShapeColor", handle, component, 0, color)
-                except Exception as e:
-                    print(f"⚠️ Error al establecer color componente {component}: {e}")
-            
-            # Establecer el padre si es diferente de -1 (escena)
-            if parent_handle != -1:
-                try:
-                    # Verificar que el handle del padre exista
-                    parent_check_response = await self.send_request("sim.getObjectType", parent_handle)
-                    parent_check_data = json.loads(parent_check_response)
-                    
-                    if parent_check_data.get("success", False):
-                        await self.send_request("sim.setObjectParent", handle, parent_handle, True)
-                    else:
-                        print(f"⚠️ El handle del padre {parent_handle} no es válido")
-                except Exception as e:
-                    print(f"⚠️ Error al establecer padre: {e}")
-            
-            # Registramos el handle como creado exitosamente
-            print(f"✅ Cuboide creado exitosamente con handle: {handle}")
-            self.created_cubes.append(handle)
-            return handle
-            
-        except Exception as e:
-            print(f"❌ Error al crear cuboide con createMeshShape: {e}")
-            return None
+            print(f"❌ Error al eliminar robot: {e}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
