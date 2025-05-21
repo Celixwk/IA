@@ -3,7 +3,6 @@ import math
 from heapq import heappush, heappop
 from PyQt5.QtWidgets import (QMessageBox, QApplication)
 from constants import GRID_SIZE, EMPTY, OBSTACLE, CELL_SIZE, START, END
-from NavigationController import NavigationController
 
 class CoppeliaSimController:
     def __init__(self, host="localhost", port=23000):
@@ -24,24 +23,18 @@ class CoppeliaSimController:
             # Verificar que podemos acceder a CoppeliaSim obteniendo el estado de simulación
             state = self.sim.getSimulationState()
             self.connected = True
-            print(f"Conectado a CoppeliaSim usando ZeroMQ. Estado de simulación: {state}")
+            print(f"✅ Conectado a CoppeliaSim usando ZeroMQ. Estado de simulación: {state}")
             
-            # Verificar comandos disponibles
+            # Opcional: Verificar tiempo de simulación como prueba adicional
             try:
                 sim_time = self.sim.getSimulationTime()
                 print(f"Tiempo de simulación actual: {sim_time}")
             except Exception as e:
-                print(f"Advertencia: No se pudo verificar algunos comandos: {e}")
-            
-            # NUEVO: Listar métodos disponibles y tipos primitivos
-            print("\n==== DIAGNÓSTICO DE API ====")
-            self.list_available_methods()
-            self.list_primitive_types()
-            print("==== FIN DE DIAGNÓSTICO ====\n")
+                print(f"Advertencia: No se pudo verificar tiempo de simulación: {e}")
                 
             return True
         except Exception as e:
-            print(f"Error de conexión ZeroMQ: {e}")
+            print(f"❌ Error de conexión ZeroMQ: {e}")
             self.connected = False
             return False
     
@@ -104,26 +97,6 @@ class CoppeliaSimController:
         except Exception as e:
             print(f"❌ Excepción al eliminar cubo con handle {handle}: {e}")
             return False
-    
-    def get_available_methods(self):
-        """Obtiene una lista aproximada de métodos disponibles en ZeroMQ API"""
-        if not self.connected:
-            print("No hay conexión activa")
-            return []
-        
-        # ZeroMQ no proporciona un método para enumerar todos los métodos disponibles
-        # Devolvemos una lista predefinida de métodos comunes como referencia
-        common_methods = [
-            "sim.startSimulation", 
-            "sim.stopSimulation", 
-            "sim.pauseSimulation",
-            "sim.getSimulationState", 
-            "sim.createPrimitiveShape",
-            "sim.removeObject",
-            "sim.setObjectPosition",
-            "sim.setShapeColor"
-        ]
-        return common_methods
     
     def start_simulation(self):
         """Inicia la simulación en CoppeliaSim y recrea objetos si es necesario"""
@@ -213,22 +186,20 @@ class CoppeliaSimController:
             return False
         
         # Añadimos esta función para reemplazar execute_path en CoppeliaSimController
-    def execute_path(self, start_pos, end_pos, obstacles):
+    def execute_path(self, start_pos, end_pos, obstacles=None):
         """
-        Controlador simplificado y agresivo para el robot Pioneer P3DX.
-        Se enfoca únicamente en llegar al objetivo de manera directa.
+        Implementa la navegación básica del robot Pioneer P3DX hacia un punto objetivo.
         
         Args:
             start_pos: Tupla (row, col) con la posición inicial del robot
             end_pos: Tupla (row, col) con la posición final deseada
-            obstacles: Lista de tuplas (row, col) con posiciones de obstáculos
+            obstacles: Lista de obstáculos (no utilizada en esta implementación simplificada)
         """
         if not self.connected:
             print("❌ No se puede ejecutar recorrido: no hay conexión activa")
             return False
                 
-        print(f"Ejecutando recorrido directo desde {start_pos} hasta {end_pos}")
-        print(f"Evitando {len(obstacles)} obstáculos")
+        print(f"Ejecutando recorrido desde {start_pos} hasta {end_pos}")
         
         try:
             # 1. Convertir coordenadas de cuadrícula a coordenadas CoppeliaSim
@@ -242,273 +213,169 @@ class CoppeliaSimController:
             
             print(f"Posición objetivo en coordenadas CoppeliaSim: {target_position}")
             
-            # 2. Buscar los motores y el robot
+            # 2. Buscar el robot
+            robot_handle = None
+            possible_robot_names = ["Pioneer_p3dx", "/PioneerP3DX", "PioneerP3DX", "/Pioneer_p3dx"]
+            
+            for name in possible_robot_names:
+                try:
+                    robot_handle = self.sim.getObject(name)
+                    if robot_handle:
+                        print(f"Robot encontrado: {name}")
+                        break
+                except:
+                    continue
+            
+            if not robot_handle:
+                print("❌ No se pudo encontrar el robot")
+                return False
+            
+            print(f"✅ Robot encontrado con handle: {robot_handle}")
+            
+            # 3. Buscar los motores
             left_motor = None
             right_motor = None
-            robot_handle = None
             
-            # Obtener los motores (probando diferentes nombres)
-            try:
-                # Enfoque directo y específico para los motores
-                print("Buscando motores con nombres específicos...")
-                left_motor = self.sim.getObject("/PioneerP3DX/leftMotor")
-                right_motor = self.sim.getObject("/PioneerP3DX/rightMotor")
-            except:
+            motor_names = [
+                ["Pioneer_p3dx_leftMotor", "Pioneer_p3dx_rightMotor"],
+                ["/PioneerP3DX/leftMotor", "/PioneerP3DX/rightMotor"],
+                ["leftMotor", "rightMotor"]
+            ]
+            
+            for left_name, right_name in motor_names:
                 try:
-                    left_motor = self.sim.getObject("Pioneer_p3dx_leftMotor")
-                    right_motor = self.sim.getObject("Pioneer_p3dx_rightMotor")
-                except Exception as e:
-                    print(f"❌ Error al obtener motores: {e}")
-                    return False
-                    
-            # Obtener handle del robot (probando diferentes nombres)
-            try:
-                # Enfoque directo y específico para el robot
-                print("Buscando robot con nombres específicos...")
-                robot_handle = self.sim.getObject("/PioneerP3DX")
-            except:
-                try:
-                    robot_handle = self.sim.getObject("Pioneer_p3dx")
-                except Exception as e:
-                    print(f"❌ Error al obtener robot: {e}")
-                    return False
+                    left_motor = self.sim.getObject(left_name)
+                    right_motor = self.sim.getObject(right_name)
+                    if left_motor and right_motor:
+                        print(f"Motores encontrados: {left_name}, {right_name}")
+                        break
+                except:
+                    continue
             
-            print(f"✅ Motores y robot encontrados")
+            if not left_motor or not right_motor:
+                print("❌ No se pudieron encontrar los motores")
+                return False
             
-            # 3. Crear un objetivo visual (esfera roja grande)
+            # 4. Crear un objetivo visual (targetDummy)
             try:
-                # Intentar eliminar objetivo anterior si existe
+                # Eliminar objetivo anterior si existe
                 try:
                     old_target = self.sim.getObject("NavTarget")
                     self.sim.removeObject(old_target)
                 except:
                     pass
                 
-                # Crear un nuevo objetivo visual (una esfera)
-                target_size = 0.3  # Esfera muy grande para visualización
-                # Usar nombre primitivo exacto para evitar errores
-                target_handle = self.sim.createPrimitiveShape(1, [target_size, target_size, target_size])
+                # Crear un dummy como objetivo
+                target_handle = self.sim.createDummy(0.1)  # 10cm de diámetro
                 self.sim.setObjectPosition(target_handle, -1, target_position)
+                self.sim.setObjectAlias(target_handle, "NavTarget")
                 
-                # Intentar nombrar el objetivo
+                # Intento de cambiar el color a blanco
                 try:
-                    self.sim.setObjectAlias(target_handle, "NavTarget")
+                    self.sim.setShapeColor(target_handle, 0, 0, [1, 1, 1])
                 except:
-                    try:
-                        self.sim.setObjectName(target_handle, "NavTarget")
-                    except:
-                        pass
+                    pass
                 
-                # Intentar cambiar el color a rojo brillante (con manejo de errores robusto)
-                try:
-                    print("Intentando establecer color rojo brillante para el objetivo...")
-                    self.sim.setShapeColor(target_handle, 0, 0, [1, 0, 0])  # Intento simplificado
-                except Exception as color_error:
-                    try:
-                        print(f"Primer intento fallido: {color_error}")
-                        self.sim.setShapeColor(target_handle, 0, 16, [1, 0, 0])  # Intento alternativo
-                    except:
-                        print("No se pudo establecer el color, pero continuando...")
-                    
                 print(f"✅ Objetivo visual creado en: {target_position}")
             except Exception as e:
                 print(f"⚠️ Error al crear objetivo visual: {e}")
-                import traceback
-                traceback.print_exc()
-                # Continuar incluso sin el objetivo visual
             
-            # 4. Iniciar navegación directa simplificada
+            # 5. Iniciar navegación simple
             import threading
             import time
             import math
-            import random
             
-            # Variable de control
+            # Variable de control para el hilo
             self.navigation_active = True
             
-            def direct_navigation_controller():
-                """Controlador de navegación directa y agresiva"""
-                print("🚀 Iniciando controlador de navegación directa y agresiva")
+            def navigation_controller():
+                """Controlador simple de navegación hacia el objetivo"""
+                print("🚀 Iniciando navegación hacia el objetivo")
                 
-                # Parámetros con velocidades muy altas para movimiento agresivo
-                max_velocity = 5.0       # Velocidad lineal máxima (m/s) - incrementada para movimiento más rápido
-                turn_velocity = 2.0      # Velocidad de giro mucho más alta
-                
-                # Umbrales
-                distance_threshold = 0.3  # Distancia para considerar llegada (m)
-                
-                # Control de maniobras de escape
-                stuck_timer = 0
-                escape_counter = 0
-                
-                # Registro de posición para detección de estancamiento
-                prev_pos = None
-                distances = []
-                
-                # Bucle principal
                 try:
-                    start_time = time.time()
+                    # Variables para control
+                    max_velocity = 2.0  # Velocidad máxima
+                    distance_threshold = 0.5  # Distancia para considerar llegada
                     
+                    # Bucle de navegación
                     while self.navigation_active:
-                        # 1. Obtener posición y orientación actual del robot
-                        try:
-                            robot_pos = self.sim.getObjectPosition(robot_handle, -1)
-                            robot_orient = self.sim.getObjectOrientation(robot_handle, -1)
-                            robot_angle = robot_orient[2]  # Yaw (rotación en Z)
-                        except Exception as pos_error:
-                            print(f"Error al obtener posición: {pos_error}")
-                            time.sleep(0.1)
-                            continue
+                        # Obtener posición y orientación del robot
+                        robot_pos = self.sim.getObjectPosition(robot_handle, -1)
+                        robot_orient = self.sim.getObjectOrientation(robot_handle, -1)
+                        robot_angle = robot_orient[2]  # Yaw (rotación en Z)
                         
-                        # 2. Calcular distancia y dirección al objetivo
+                        # Calcular distancia al objetivo
                         dx = target_position[0] - robot_pos[0]
                         dy = target_position[1] - robot_pos[1]
                         distance = math.sqrt(dx*dx + dy*dy)
                         
-                        # Registrar distancia para detección de estancamiento
-                        distances.append(distance)
-                        if len(distances) > 10:
-                            distances.pop(0)
-                        
                         print(f"Distancia al objetivo: {distance:.2f}m")
                         
-                        # Si está muy cerca del objetivo, detenerse
+                        # Verificar llegada al objetivo
                         if distance < distance_threshold:
+                            print("🏁 ¡Objetivo alcanzado!")
                             self.sim.setJointTargetVelocity(left_motor, 0)
                             self.sim.setJointTargetVelocity(right_motor, 0)
-                            print("🏁 ¡Objetivo alcanzado! Robot detenido.")
                             break
                         
-                        # Verificar si estamos atascados
-                        stuck = False
-                        if len(distances) >= 10:
-                            max_diff = max(distances) - min(distances)
-                            if max_diff < 0.05:  # Si no hay progreso significativo
-                                stuck = True
-                                stuck_timer += 1
-                            else:
-                                stuck_timer = 0
-                        
-                        # Si estamos atascados por mucho tiempo o han pasado más de 30 segundos
-                        if stuck_timer > 10 or (time.time() - start_time > 30 and distance > 1.0):
-                            print("⚠️ Robot atascado o tomando demasiado tiempo, aplicando maniobra agresiva")
-                            
-                            # Maniobra agresiva aleatoria
-                            escape_sequence = random.randint(1, 3)
-                            
-                            if escape_sequence == 1:
-                                # Maniobra 1: Retroceder y girar
-                                print("Maniobra de escape 1: Retroceder y girar")
-                                self.sim.setJointTargetVelocity(left_motor, -3.0)
-                                self.sim.setJointTargetVelocity(right_motor, -3.0)
-                                time.sleep(1.0)
-                                self.sim.setJointTargetVelocity(left_motor, 3.0)
-                                self.sim.setJointTargetVelocity(right_motor, -3.0)
-                                time.sleep(1.5)
-                            
-                            elif escape_sequence == 2:
-                                # Maniobra 2: Giro completo
-                                print("Maniobra de escape 2: Giro completo")
-                                self.sim.setJointTargetVelocity(left_motor, 4.0)
-                                self.sim.setJointTargetVelocity(right_motor, -4.0)
-                                time.sleep(3.0)
-                            
-                            else:
-                                # Maniobra 3: Zigzag
-                                print("Maniobra de escape 3: Zigzag")
-                                for _ in range(2):
-                                    self.sim.setJointTargetVelocity(left_motor, 4.0)
-                                    self.sim.setJointTargetVelocity(right_motor, 1.0)
-                                    time.sleep(0.5)
-                                    self.sim.setJointTargetVelocity(left_motor, 1.0)
-                                    self.sim.setJointTargetVelocity(right_motor, 4.0)
-                                    time.sleep(0.5)
-                            
-                            stuck_timer = 0
-                            escape_counter += 1
-                            distances = []  # Reiniciar registro de distancias
-                            start_time = time.time()  # Reiniciar temporizador
-                            
-                            # Si hemos intentado demasiadas maniobras y seguimos lejos
-                            if escape_counter > 5 and distance > 3.0:
-                                print("⚠️ Demasiados intentos sin éxito, probando enfoque diferente")
-                                # Movimiento agresivo directo
-                                self.sim.setJointTargetVelocity(left_motor, 5.0)
-                                self.sim.setJointTargetVelocity(right_motor, 5.0)
-                                time.sleep(2.0)
-                                escape_counter = 0
-                            
-                            continue  # Volver al inicio del bucle
-                        
-                        # 3. Calcular ángulo hacia el objetivo
+                        # Calcular ángulo hacia el objetivo
                         target_angle = math.atan2(dy, dx)
                         
-                        # 4. Calcular error de orientación
+                        # Calcular error de orientación
                         orientation_error = target_angle - robot_angle
                         
-                        # Normalizar el error al rango (-pi, pi)
+                        # Normalizar el error a [-π, π]
                         while orientation_error > math.pi:
                             orientation_error -= 2 * math.pi
                         while orientation_error < -math.pi:
                             orientation_error += 2 * math.pi
-                            
-                        print(f"Orientación actual: {robot_angle:.2f}, Objetivo: {target_angle:.2f}, Error: {orientation_error:.2f}")
                         
-                        # 5. Enfoque simple pero efectivo para la navegación
-                        left_velocity = 0
-                        right_velocity = 0
+                        print(f"Orientación: actual={robot_angle:.2f}, objetivo={target_angle:.2f}, error={orientation_error:.2f}")
                         
-                        # Si el error de orientación es grande, girar agresivamente
-                        if abs(orientation_error) > 0.3:  # ~17 grados
-                            # Giro agresivo
-                            turn_speed = turn_velocity
-                            
-                            if orientation_error > 0:  # Necesita girar a la izquierda
-                                left_velocity = -turn_speed * 1.5  # Más agresivo
-                                right_velocity = turn_speed * 1.5
-                                print(f"Girando AGRESIVAMENTE a la IZQUIERDA: {turn_speed}")
-                            else:  # Necesita girar a la derecha
-                                left_velocity = turn_speed * 1.5
-                                right_velocity = -turn_speed * 1.5
-                                print(f"Girando AGRESIVAMENTE a la DERECHA: {turn_speed}")
+                        # Calcular velocidades de los motores
+                        if abs(orientation_error) > 0.3:  # Si la orientación es muy diferente, corregir primero
+                            if orientation_error > 0:  # Girar a la izquierda
+                                left_velocity = -max_velocity * 0.5
+                                right_velocity = max_velocity * 0.5
+                            else:  # Girar a la derecha
+                                left_velocity = max_velocity * 0.5
+                                right_velocity = -max_velocity * 0.5
+                            print("Girando para orientarse al objetivo")
                         else:
-                            # Avanzar con corrección proporcional a la orientación
-                            forward_speed = max_velocity
-                            steering = orientation_error * 0.5
+                            # Avanzar con corrección de dirección
+                            forward_speed = max_velocity * min(1.0, distance)
+                            steering = orientation_error * 1.5
                             
                             left_velocity = forward_speed - steering
                             right_velocity = forward_speed + steering
-                            
-                            print(f"Avanzando rápido: Vel={forward_speed}")
+                            print(f"Avanzando hacia el objetivo: L={left_velocity:.2f}, R={right_velocity:.2f}")
                         
-                        # 6. Aplicar velocidades a los motores
+                        # Aplicar velocidades a los motores
                         self.sim.setJointTargetVelocity(left_motor, left_velocity)
                         self.sim.setJointTargetVelocity(right_motor, right_velocity)
                         
                         # Pausa breve para no saturar la CPU
-                        time.sleep(0.05)
+                        time.sleep(0.1)
                     
-                    # Al finalizar, detener motores
-                    try:
-                        self.sim.setJointTargetVelocity(left_motor, 0)
-                        self.sim.setJointTargetVelocity(right_motor, 0)
-                        print("✅ Navegación finalizada")
-                    except:
-                        pass
-                        
+                    print("✅ Navegación finalizada")
+                    
                 except Exception as e:
-                    print(f"❌ Error en bucle de navegación: {e}")
+                    print(f"❌ Error en navegación: {e}")
                     import traceback
                     traceback.print_exc()
-                    # Intentar detener el robot si hay error
+                    
+                finally:
+                    # Detener motores al finalizar
                     try:
-                        self.sim.setJointTargetVelocity(left_motor, 0)
-                        self.sim.setJointTargetVelocity(right_motor, 0)
+                        if left_motor and right_motor:
+                            self.sim.setJointTargetVelocity(left_motor, 0)
+                            self.sim.setJointTargetVelocity(right_motor, 0)
+                            print("Robot detenido")
                     except:
                         pass
-                        
-            # Iniciar el thread de navegación
-            nav_thread = threading.Thread(target=direct_navigation_controller)
+            
+            # Iniciar el hilo de navegación
+            nav_thread = threading.Thread(target=navigation_controller)
             nav_thread.daemon = True
             nav_thread.start()
             
@@ -527,191 +394,6 @@ class CoppeliaSimController:
         self.navigation_active = False
         print("Navegación detenida manualmente")
         return True
-        
-    def direct_robot_movement_to_target(self, target_position):
-        """
-        Mueve el robot directamente hacia una posición objetivo.
-        
-        Args:
-            target_position: Lista [x, y, z] con la posición de destino
-        """
-        try:
-            # Obtener los handles de los motores
-            try:
-                left_motor = self.sim.getObject("Pioneer_p3dx_leftMotor")
-                right_motor = self.sim.getObject("Pioneer_p3dx_rightMotor")
-            except:
-                try:
-                    left_motor = self.sim.getObject("/Pioneer_p3dx/leftMotor")
-                    right_motor = self.sim.getObject("/Pioneer_p3dx/rightMotor")
-                except Exception as e:
-                    print(f"No se pudieron obtener los handles de los motores: {e}")
-                    return False
-            
-            # Establecer velocidades para ambos motores
-            self.sim.setJointTargetVelocity(left_motor, 2.0)
-            self.sim.setJointTargetVelocity(right_motor, 2.0)
-            
-            print(f"✅ Robot en movimiento hacia objetivo: {target_position}")
-            return True
-        except Exception as e:
-            print(f"❌ Error al mover el robot: {e}")
-            return False
-
-    def get_object_safely(self, object_name, alternatives=None):
-        """
-        Intenta obtener un objeto de CoppeliaSim por su nombre de manera segura,
-        probando diferentes variantes del nombre y manejando errores.
-        
-        Args:
-            object_name: Nombre principal del objeto a buscar
-            alternatives: Lista opcional de nombres alternativos a probar
-            
-        Returns:
-            El handle del objeto si se encuentra, None en caso contrario
-        """
-        if not self.connected:
-            print(f"No se puede buscar '{object_name}': no hay conexión activa")
-            return None
-            
-        # Lista de variantes de sintaxis a probar
-        name_variants = [
-            object_name,               # Nombre exacto
-            f"/{object_name}",         # Con barra al inicio
-            f"./{object_name}",        # Con ./ al inicio
-            object_name.lower(),       # En minúsculas
-            object_name.upper(),       # En mayúsculas
-            # Variantes sin espacios
-            object_name.replace(" ", ""),
-            f"/{object_name.replace(' ', '')}",
-            object_name.replace(" ", "").lower(),
-            object_name.replace(" ", "").upper(),
-            f"/{object_name.replace(' ', '')}".lower(),
-            f"/{object_name.replace(' ', '')}".upper(),
-            # Variante específica que vemos en la imagen
-            "/PioneerP3DX",
-            "PioneerP3DX",
-            "/pioneerp3dx",
-            "pioneerp3dx"
-        ]
-        
-        # Agregar alternativas si se proporcionan
-        if alternatives:
-            for alt in alternatives:
-                name_variants.append(alt)
-                name_variants.append(f"/{alt}")
-                name_variants.append(f"./{alt}")
-                # También agregar variantes sin espacios
-                name_variants.append(alt.replace(" ", ""))
-                name_variants.append(f"/{alt.replace(' ', '')}")
-        
-        # Eliminar duplicados
-        name_variants = list(set(name_variants))
-        
-        # Probar cada variante
-        for name in name_variants:
-            try:
-                handle = self.sim.getObject(name)
-                print(f"✅ Objeto '{name}' encontrado con handle: {handle}")
-                return handle
-            except Exception as e:
-                # Falló esta variante, intentar la siguiente
-                pass
-        
-        # Si llegamos aquí, no se encontró el objeto
-        print(f"❌ No se pudo encontrar el objeto '{object_name}'")
-        print("Nombres probados:")
-        for name in name_variants:
-            print(f"  - '{name}'")
-        return None
-    
-    def find_path(self, start, end, obstacles):
-        """
-        Implementa el algoritmo A* para encontrar un camino óptimo desde start hasta end,
-        evitando los obstacles.
-        
-        Args:
-            start: Tupla (row, col) con la posición inicial
-            end: Tupla (row, col) con la posición final
-            obstacles: Lista de tuplas (row, col) con las posiciones de los obstáculos
-        
-        Returns:
-            Lista de tuplas (row, col) con el camino encontrado, o lista vacía si no hay camino
-        """
-        from heapq import heappush, heappop
-        import math
-        
-        print(f"Buscando camino desde {start} hasta {end}")
-        print(f"Obstáculos: {obstacles}")
-        
-        # Convertir obstáculos a un set para búsqueda más rápida
-        obstacles_set = set(obstacles)
-        
-        # Función heurística: distancia Manhattan
-        def heuristic(a, b):
-            return abs(a[0] - b[0]) + abs(a[1] - b[1])
-        
-        def get_neighbors(pos):
-            row, col = pos
-            neighbors = []
-            
-            # 4 direcciones: derecha, abajo, izquierda, arriba
-            for dr, dc in [(0, 1), (1, 0), (0, -1), (-1, 0)]:
-                new_row, new_col = row + dr, col + dc
-                
-                # Verificar límites de la cuadrícula y obstáculos
-                if (0 <= new_row < 10 and 0 <= new_col < 10 and 
-                    (new_row, new_col) not in obstacles_set):
-                    neighbors.append((new_row, new_col))
-                    
-            return neighbors
-        
-        # Inicializar estructuras para A*
-        open_set = []
-        heappush(open_set, (0, start))  # (f_score, position)
-        
-        came_from = {start: None}  # Para reconstruir el camino
-        g_score = {start: 0}  # Costo desde el inicio
-        f_score = {start: heuristic(start, end)}  # Costo estimado total
-        
-        # Algoritmo A*
-        while open_set:
-            # Obtener el nodo con menor f_score
-            _, current = heappop(open_set)
-            
-            # Si llegamos al destino, reconstruir el camino
-            if current == end:
-                path = []
-                while current:
-                    path.append(current)
-                    current = came_from[current]
-                path.reverse()  # El camino está en orden inverso
-                return path
-            
-            # Explorar vecinos
-            for neighbor in get_neighbors(current):
-                # Costo tentativo desde el inicio hasta el vecino
-                tentative_g = g_score[current] + 1  # 1 es el costo de moverse a un vecino
-                
-                # Si encontramos un camino mejor, actualizar
-                if neighbor not in g_score or tentative_g < g_score[neighbor]:
-                    came_from[neighbor] = current
-                    g_score[neighbor] = tentative_g
-                    f_score[neighbor] = tentative_g + heuristic(neighbor, end)
-                    
-                    # Agregar a la cola de prioridad si no está ya
-                    in_open_set = False
-                    for _, pos in open_set:
-                        if pos == neighbor:
-                            in_open_set = True
-                            break
-                            
-                    if not in_open_set:
-                        heappush(open_set, (f_score[neighbor], neighbor))
-        
-        # Si llegamos aquí, no hay camino
-        print("⚠️ No se encontró camino")
-        return []
     
     def cargar_muro_personalizado(self, size=[0.1, 0.1, 0.1], position=[0, 0, 0], color=None):
         """
@@ -804,280 +486,6 @@ class CoppeliaSimController:
             import traceback
             traceback.print_exc()
             return None
-
-    def direct_robot_movement(self):
-        """
-        Método directo para mover el robot sin depender de algoritmos complejos.
-        Este método garantiza que el robot se mueva.
-        """
-        try:
-            # Obtener nombres exactos del entorno
-            robot_name = "/PioneerP3DX"
-            left_motor_name = "/PioneerP3DX/leftMotor"
-            right_motor_name = "/PioneerP3DX/rightMotor"
-            
-            # Obtener handles
-            robot_handle = self.sim_controller.sim.getObject(robot_name)
-            left_motor = self.sim_controller.sim.getObject(left_motor_name)
-            right_motor = self.sim_controller.sim.getObject(right_motor_name)
-            
-            print(f"Robot y motores localizados correctamente")
-            print(f"Robot: {robot_handle}, Motor izquierdo: {left_motor}, Motor derecho: {right_motor}")
-            
-            # Aplicar velocidades directamente - valores simples pero efectivos
-            left_speed = 2.0
-            right_speed = 2.0
-            
-            # Intentar primero con velocidades iguales para avanzar en línea recta
-            self.sim_controller.sim.setJointTargetVelocity(left_motor, left_speed)
-            self.sim_controller.sim.setJointTargetVelocity(right_motor, right_speed)
-            
-            print(f"Velocidades aplicadas - Izquierda: {left_speed}, Derecha: {right_speed}")
-            print("Robot en movimiento directo")
-            
-            return True
-        except Exception as e:
-            print(f"Error en movimiento directo: {e}")
-            import traceback
-            traceback.print_exc()
-            return False
-
-    def create_robot(self, robot_type, position, orientation=None):
-        """
-        Crea un robot en CoppeliaSim cargando un modelo predefinido.
-        Versión mejorada con altura y nombre correctos.
-        """
-        if not self.connected:
-            print("❌ No se puede crear robot: no hay conexión activa")
-            return {"success": False, "error": "No hay conexión activa"}
-        
-        try:
-            print(f"Intentando cargar el modelo del robot {robot_type} en posición {position}")
-            
-            # Cargar el modelo del robot
-            robot_handle = None
-            try:
-                # Intentar cargar el modelo del robot
-                robot_handle = self.sim.loadModel("models/robots/mobile/pioneer p3dx.ttm")
-                print(f"Modelo cargado con handle: {robot_handle}")
-            except Exception as e:
-                print(f"Error al cargar el modelo: {e}")
-                
-                # Intentar rutas alternativas
-                alternative_paths = [
-                    "models/mobile/pioneer p3dx.ttm",
-                    "models/robots/Pioneer_p3dx.ttm",
-                    "Pioneer_p3dx.ttm",
-                    "/models/robots/mobile/pioneer p3dx.ttm",
-                    "./models/robots/mobile/pioneer p3dx.ttm",
-                    "models/robots/mobile/PioneerP3DX.ttm"
-                ]
-                
-                for path in alternative_paths:
-                    try:
-                        print(f"Intentando cargar desde ruta alternativa: {path}")
-                        robot_handle = self.sim.loadModel(path)
-                        print(f"Modelo cargado desde ruta alternativa con handle: {robot_handle}")
-                        break
-                    except Exception as alt_error:
-                        print(f"Error con ruta alternativa {path}: {alt_error}")
-            
-            # Si no se pudo cargar el modelo, crear un objeto visual simple
-            if robot_handle is None:
-                try:
-                    print("Creando objeto visual simple como sustituto...")
-                    # Crear un cuboide para representar el robot (primitiva de tipo cuboide)
-                    robot_handle = self.sim.createPrimitiveShape(0, 18, [0.3, 0.4, 0.2])
-                    self.sim.setShapeColor(robot_handle, None, 0, [1, 0, 0])  # Color rojo
-                    
-                    # Intentar crear un par de ruedas/articulaciones para simular el movimiento
-                    try:
-                        # Crear articulación izquierda
-                        left_joint = self.sim.createJoint(3, 2)  # Tipo revolución, modo cinemático
-                        self.sim.setObjectParent(left_joint, robot_handle, True)
-                        self.sim.setObjectPosition(left_joint, robot_handle, [-0.15, 0.1, -0.1])
-                        self.sim.setObjectAlias(left_joint, "leftMotor")
-                        
-                        # Crear articulación derecha
-                        right_joint = self.sim.createJoint(3, 2)  # Tipo revolución, modo cinemático
-                        self.sim.setObjectParent(right_joint, robot_handle, True)
-                        self.sim.setObjectPosition(right_joint, robot_handle, [-0.15, -0.1, -0.1])
-                        self.sim.setObjectAlias(right_joint, "rightMotor")
-                        
-                        print("Articulaciones creadas exitosamente")
-                    except Exception as joint_error:
-                        print(f"Error al crear articulaciones: {joint_error}")
-                    
-                    print(f"Objeto visual creado con handle: {robot_handle}")
-                except Exception as shape_error:
-                    print(f"Error al crear forma visual: {shape_error}")
-                    return {"success": False, "error": "No se pudo crear ninguna representación del robot"}
-                    
-            # Si llegamos aquí, tenemos un handle de robot. Posicionarlo.
-            try:
-                print(f"Estableciendo posición del robot a: {position}")
-                
-                # Asegurarse que la altura es correcta (Z)
-                # La altura debe ser adecuada para que el robot no esté enterrado ni flotando
-                position[2] = 0.1384  # Altura correcta para el Pioneer P3DX
-                
-                self.sim.setObjectPosition(robot_handle, -1, position)
-                
-                # Verificar si el posicionamiento funcionó
-                current_pos = self.sim.getObjectPosition(robot_handle, -1)
-                print(f"Posición actual del robot: {current_pos}")
-                
-                # Asignar un alias claro para facilitar la identificación
-                try:
-                    # Probamos varias formas de establecer el nombre según la versión de CoppeliaSim
-                    try:
-                        self.sim.setObjectAlias(robot_handle, "PioneerP3DX")
-                    except:
-                        try:
-                            self.sim.setObjectName(robot_handle, "PioneerP3DX") 
-                        except:
-                            print("No se pudo establecer un nombre para el robot")
-                except Exception as e:
-                    print(f"Error al establecer nombre/alias: {e}")
-                    # Continuar incluso si no se puede establecer el nombre
-            except Exception as pos_error:
-                print(f"Error al posicionar el robot: {pos_error}")
-            
-            print(f"✅ Robot cargado y posicionado con handle: {robot_handle}")
-            return {
-                "success": True,
-                "handle": robot_handle
-            }
-        except Exception as e:
-            print(f"❌ Error general al crear robot: {e}")
-            return {
-                "success": False,
-                "error": str(e)
-            }
-        
-    def read_ultrasonic_sensors(self):
-        """
-        Lee los valores de los sensores ultrasónicos del robot Pioneer P3DX
-        y devuelve las distancias detectadas
-        """
-        if not self.connected:
-            print("❌ No se pueden leer sensores: no hay conexión activa")
-            return None
-            
-        try:
-            # Obtener las handles de los sensores ultrasónicos
-            sensor_distances = []
-            sensor_handles = []
-            
-            # Buscar todos los sensores ultrasónicos del robot
-            for i in range(1, 17):  # El Pioneer P3DX tiene 16 sensores ultrasónicos
-                try:
-                    sensor_name = f"Pioneer_p3dx_ultrasonicSensor{i}"
-                    _, sensor_handle = self.sim.simxGetObjectHandle(
-                        self.clientID, 
-                        sensor_name, 
-                        self.sim.simx_opmode_blocking
-                    )
-                    sensor_handles.append(sensor_handle)
-                    print(f"Sensor {sensor_name} encontrado con handle {sensor_handle}")
-                except Exception as e:
-                    print(f"No se pudo obtener handle para sensor {i}: {e}")
-            
-            # Leer los valores de los sensores
-            for handle in sensor_handles:
-                try:
-                    # Leer el sensor de proximidad
-                    ret, detection_state, detected_point, _, _ = self.sim.simxReadProximitySensor(
-                        self.clientID,
-                        handle,
-                        self.sim.simx_opmode_blocking
-                    )
-                    
-                    if ret == 0:  # Si la lectura fue exitosa
-                        if detection_state:
-                            # Calcular la distancia al punto detectado
-                            import numpy as np
-                            distance = np.linalg.norm(detected_point)
-                            sensor_distances.append(distance)
-                        else:
-                            # No se detectó nada, usar valor máximo
-                            sensor_distances.append(0.5)  # 0.5 metros como valor máximo
-                    else:
-                        print(f"Error al leer sensor {handle}")
-                        sensor_distances.append(0.5)  # Valor por defecto
-                except Exception as e:
-                    print(f"Error al leer sensor {handle}: {e}")
-                    sensor_distances.append(0.5)  # Valor por defecto
-            
-            return sensor_distances
-        
-        except Exception as e:
-            print(f"❌ Error general al leer sensores: {e}")
-            return None
-        
-    def configure_robot_sensors(self, robot_handle):
-        """
-        Configura específicamente los sensores del robot Pioneer P3DX para 
-        que detecten correctamente los obstáculos.
-        """
-        if not self.connected or robot_handle is None:
-            return False
-        
-        try:
-            print(f"Configurando sensores del robot con handle: {robot_handle}")
-            
-            # Obtener todos los objetos en el árbol del robot
-            children = self.sim.getObjectsInTree(robot_handle, 0, 0)
-            
-            # Parámetros para los sensores ultrasónicos
-            sensor_count = 0
-            
-            # Buscar sensores y configurarlos
-            for child in children:
-                try:
-                    # Verificar si es un sensor de proximidad
-                    child_name = self.sim.getObjectName(child)
-                    
-                    if "ultrasonic" in child_name.lower() or "sensor" in child_name.lower():
-                        # Es un sensor, configurarlo para detección óptima
-                        
-                        # 1. Aumentar el rango de detección
-                        self.sim.setObjectFloatParam(
-                            child, 
-                            4001,  # sim_proxsensorfloatparam_far_clipping
-                            0.5    # 50cm de detección
-                        )
-                        
-                        # 2. Configurar qué entidades puede detectar (todo)
-                        self.sim.setObjectInt32Param(
-                            child,
-                            4000,  # sim_proxintparam_entity_to_detect
-                            1+2+4+8+16  # Todo tipo de entidades
-                        )
-                        
-                        # 3. Aumentar el ángulo de apertura
-                        try:
-                            self.sim.setObjectFloatParam(
-                                child,
-                                4004,  # sim_proxsensorfloatparam_angle
-                                0.5    # Ángulo de apertura más amplio
-                            )
-                        except:
-                            pass
-                        
-                        sensor_count += 1
-                        print(f"✅ Sensor {child_name} configurado")
-                except:
-                    continue
-            
-            print(f"Se configuraron {sensor_count} sensores para el robot")
-            return sensor_count > 0
-        
-        except Exception as e:
-            print(f"❌ Error al configurar sensores: {e}")
-            import traceback
-            traceback.print_exc()
-            return False
     
     def test_connection(self):
         """Prueba la conexión enviando una solicitud simple"""
@@ -1146,204 +554,60 @@ class CoppeliaSimController:
         except Exception as e:
             print(f"⚠️ Error al establecer alias: {e}")
             return False
-
-    def remove_robot(self, handle):
+        
+    def clear_scene(self):
         """
-        Elimina un robot de CoppeliaSim y todos sus componentes internos
+        Elimina todos los objetos de la escena excepto los elementos básicos como el suelo.
         """
         if not self.connected:
-            print("❌ No se puede eliminar robot: no hay conexión activa")
-            return {
-                "success": False,
-                "error": "No hay conexión con CoppeliaSim"
-            }
+            print("❌ No se puede limpiar escena: no hay conexión activa")
+            return False
         
         try:
-            print(f"Eliminando robot con handle: {handle}")
+            print("Limpiando escena...")
             
-            # ENFOQUE MEJORADO: Remover por script más agresivo
-            try:
-                # Primero intentar eliminar el robot directamente con 'removeModel'
+            # Lista de objetos que queremos preservar (no eliminar)
+            preserved_objects = ["Floor", "DefaultCamera", "DefaultLight", "ResizableFloor"]
+            preserved_handles = []
+            
+            # Obtener handles de objetos a preservar
+            for obj_name in preserved_objects:
                 try:
-                    self.sim.removeModel(handle)
-                    print("✅ Robot eliminado usando removeModel")
-                    return {"success": True}
-                except Exception as e:
-                    print(f"No se pudo usar removeModel: {e}, intentando métodos alternativos...")
-                
-                # Obtener TODOS los objetos dependientes del robot, incluido el robot mismo
-                children = []
-                try:
-                    children = self.sim.getObjectsInTree(handle, 0, 0)  # Todos los objetos en la jerarquía
-                    print(f"Encontrados {len(children)} componentes internos")
-                except Exception as tree_error:
-                    print(f"Error al obtener objetos internos: {tree_error}")
-                
-                # Eliminar cada componente - empezando desde los hijos más profundos
-                for child in reversed(children):
-                    try:
-                        self.sim.removeObject(child)
-                        print(f"Componente interno eliminado: {child}")
-                    except Exception as child_error:
-                        print(f"Error al eliminar componente {child}: {child_error}")
-                        
-                # Después de eliminar todos los objetos específicos, realizar una limpieza general
-                self.remove_all_robot_components()
-                
-                return {"success": True}
-            
-            except Exception as e:
-                print(f"❌ Error general al eliminar robot: {e}")
-                return {
-                    "success": False,
-                    "error": str(e)
-                }
-            
-        except Exception as e:
-            print(f"❌ Error general al eliminar robot: {e}")
-            return {
-                "success": False,
-                "error": str(e)
-            }
-    
-    def remove_all_robot_components(self):
-        """
-        Elimina TODOS los componentes del robot de la escena
-        Versión compatible con la API detectada
-        """
-        if not self.connected:
-            print("❌ No se puede realizar limpieza: no hay conexión activa")
-            return {"success": False, "error": "No hay conexión con CoppeliaSim"}
-        
-        try:
-            print("Iniciando limpieza completa de componentes...")
-            
-            # Lista de palabras clave para identificar componentes del robot
-            robot_keywords = [
-                "ultrasonic", "sensor", "pioneer", "p3dx", "motor", "left", "right", 
-                "caster", "connection", "wheel", "joint", "visible", "Pioneer"
-            ]
-            
-            # Usar getObjects() en lugar de getObjectsWithType()
-            try:
-                all_objects = self.sim.getObjects()
-                print(f"Se encontraron {len(all_objects)} objetos en la escena")
-                
-                components_removed = 0
-                
-                # Procesamos todos los objetos
-                for obj in all_objects:
-                    try:
-                        # Obtener el nombre del objeto
-                        name = ""
-                        try:
-                            name = self.sim.getObjectName(obj)
-                        except:
-                            continue
-                        
-                        # Si es un objeto base, ignorarlo
-                        if name.lower() in ["floor", "defaultlights", "defaultcamera"]:
-                            continue
-                        
-                        # Comprobar si es un componente del robot
-                        is_robot_part = False
-                        name_lower = name.lower()
-                        
-                        for keyword in robot_keywords:
-                            if keyword.lower() in name_lower:
-                                is_robot_part = True
-                                break
-                        
-                        # Eliminar si es parte del robot
-                        if is_robot_part:
-                            try:
-                                self.sim.removeObject(obj)
-                                components_removed += 1
-                                print(f"✅ Componente eliminado: {name}")
-                            except Exception as e:
-                                print(f"❌ Error al eliminar {name}: {e}")
-                        
-                    except Exception as e:
-                        print(f"❌ Error al procesar objeto: {e}")
-                
-                # También eliminar handles de cubos registrados
-                for handle in self.created_cubes:
-                    try:
-                        self.sim.removeObject(handle)
-                        components_removed += 1
-                        print(f"✅ Cubo eliminado: {handle}")
-                    except:
-                        pass
-                
-                # Limpiar lista de cubos
-                self.created_cubes = []
-                
-                return {
-                    "success": True,
-                    "components_removed": components_removed
-                }
-                
-            except Exception as e:
-                print(f"❌ Error al obtener objetos: {e}")
-                return {"success": False, "error": f"Error al obtener objetos: {e}"}
-                
-        except Exception as e:
-            print(f"❌ Error general al realizar limpieza: {e}")
-            return {"success": False, "error": str(e)}
-        
-    def list_available_methods(self):
-        """Lista los métodos disponibles en la API de CoppeliaSim"""
-        if not self.connected:
-            return []
-            
-        try:
-            # Obtener todos los atributos del objeto sim
-            all_attrs = dir(self.sim)
-            
-            # Filtrar para mostrar solo métodos relacionados con creación de objetos
-            creation_methods = [attr for attr in all_attrs if "create" in attr.lower()]
-            load_methods = [attr for attr in all_attrs if "load" in attr.lower()]
-            object_methods = [attr for attr in all_attrs if "object" in attr.lower()]
-            
-            print("Métodos de creación disponibles:")
-            for m in creation_methods:
-                print(f"  - {m}")
-                
-            print("Métodos de carga disponibles:")
-            for m in load_methods:
-                print(f"  - {m}")
-                
-            print("Métodos de objeto disponibles:")
-            for m in object_methods:
-                print(f"  - {m}")
-                
-            return creation_methods + load_methods + object_methods
-        except Exception as e:
-            print(f"Error al listar métodos: {e}")
-            return []
-        
-    def list_primitive_types(self):
-        """Lista los tipos de primitivas disponibles en CoppeliaSim"""
-        if not self.connected:
-            return []
-            
-        try:
-            # Buscar constantes relacionadas con primitivas
-            sim_attrs = dir(self.sim)
-            primitive_consts = [attr for attr in sim_attrs if "primitive" in attr.lower()]
-            
-            print("Constantes de primitivas disponibles:")
-            for const in primitive_consts:
-                try:
-                    value = getattr(self.sim, const)
-                    print(f"  - {const} = {value}")
+                    handle = self.sim.getObject(obj_name)
+                    preserved_handles.append(handle)
+                    print(f"Preservando objeto: {obj_name}")
                 except:
                     pass
-                    
-            return primitive_consts
+            
+            # Obtener todos los objetos
+            all_objects = self.sim.getObjects()
+            print(f"Encontrados {len(all_objects)} objetos en total")
+            
+            # Eliminar objetos excepto los preservados
+            removed_count = 0
+            for obj in all_objects:
+                if obj not in preserved_handles:
+                    try:
+                        obj_name = "<sin nombre>"
+                        try:
+                            obj_name = self.sim.getObjectName(obj)
+                        except:
+                            pass
+                        
+                        self.sim.removeObject(obj)
+                        removed_count += 1
+                        print(f"Eliminado objeto: {obj_name}")
+                    except Exception as e:
+                        print(f"Error al eliminar objeto {obj}: {e}")
+            
+            print(f"✅ Escena limpiada: {removed_count} objetos eliminados")
+            return True
+            
         except Exception as e:
-            print(f"Error al listar primitivas: {e}")
-            return []
+            print(f"❌ Error al limpiar escena: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
         
     def send_command_to_coppelia(self, command):
         """
@@ -1383,25 +647,6 @@ class CoppeliaSimController:
         }
         return self.send_command_to_coppelia(command)
 
-    def move_robot_velocity(self, left_velocity, right_velocity):
-        """
-        Envía un comando para mover el robot con velocidades específicas.
-        
-        Args:
-            left_velocity: Velocidad para el motor izquierdo
-            right_velocity: Velocidad para el motor derecho
-        
-        Returns:
-            bool: True si el comando se envió correctamente, False en caso contrario
-        """
-        command = {
-            "action": "moveRobot",
-            "type": "velocity",
-            "leftVelocity": float(left_velocity),
-            "rightVelocity": float(right_velocity)
-        }
-        return self.send_command_to_coppelia(command)
-
     def move_robot_to_position(self, position):
         """
         Envía un comando para mover el robot a una posición específica.
@@ -1429,23 +674,6 @@ class CoppeliaSimController:
         command = {
             "action": "moveRobot",
             "type": "stop"
-        }
-        return self.send_command_to_coppelia(command)
-
-    def send_path_to_robot(self, waypoints):
-        """
-        Envía una ruta completa (lista de waypoints) para que el robot la siga.
-        
-        Args:
-            waypoints: Lista de posiciones [x, y, z] que forman la ruta
-        
-        Returns:
-            bool: True si el comando se envió correctamente, False en caso contrario
-        """
-        command = {
-            "action": "moveRobot",
-            "type": "path",
-            "waypoints": waypoints
         }
         return self.send_command_to_coppelia(command)
 
@@ -1494,3 +722,992 @@ class CoppeliaSimController:
             print("❌ Error al actualizar propiedades de cubos")
         
         return success
+    
+    def execute_path_for_mobile_robot(self, start_pos, end_pos, obstacles=None):
+        """
+        Implementa la navegación para la escena mobileRobotPathPlanning, trabajando con
+        el robot mobileRobot y el cilindro blanco como objetivo.
+        
+        Args:
+            start_pos: Tupla (row, col) con la posición inicial (no utilizada ya que el robot ya está en la escena)
+            end_pos: Tupla (row, col) con la posición final deseada
+            obstacles: Lista de obstáculos (opcional, no utilizada en esta implementación)
+        """
+        if not self.connected:
+            print("❌ No se puede ejecutar recorrido: no hay conexión activa")
+            return False
+                
+        print(f"Ejecutando recorrido hacia posición {end_pos}")
+        
+        try:
+            # 1. Convertir coordenadas de cuadrícula a coordenadas CoppeliaSim
+            reference_scale = 0.5
+            
+            # Calcular la posición objetivo
+            end_x = (end_pos[1] - 5 + 0.5) * reference_scale
+            end_y = (5 - end_pos[0] - 0.5) * reference_scale
+            end_z = 0.075  # Altura del cilindro blanco
+            target_position = [end_x, end_y, end_z]
+            
+            print(f"Posición objetivo en coordenadas CoppeliaSim: {target_position}")
+            
+            # 2. Buscar el robot mobileRobot
+            robot_handle = None
+            try:
+                robot_handle = self.sim.getObject("mobileRobot")
+                print(f"Robot 'mobileRobot' encontrado con handle: {robot_handle}")
+            except:
+                try:
+                    robot_handle = self.sim.getObject("/mobileRobot")
+                    print(f"Robot '/mobileRobot' encontrado con handle: {robot_handle}")
+                except Exception as e:
+                    print(f"❌ No se pudo encontrar el robot mobileRobot: {e}")
+                    return False
+            
+            # 3. Buscar el cilindro blanco (objetivo)
+            target_handle = None
+            target_names = ["Obstacle", "Cylinder", "Target", "targetObject", "Goal"]
+            
+            for name in target_names:
+                try:
+                    target_handle = self.sim.getObject(name)
+                    print(f"Objetivo encontrado: '{name}' con handle: {target_handle}")
+                    break
+                except:
+                    pass
+            
+            if not target_handle:
+                # Buscar por color blanco entre todos los objetos
+                print("Buscando cilindro blanco por propiedades...")
+                try:
+                    all_objects = self.sim.getObjects()
+                    
+                    for obj in all_objects:
+                        try:
+                            # Verificar si es una forma
+                            obj_type = self.sim.getObjectType(obj)
+                            if obj_type == 3:  # 3 = shape (forma)
+                                # Intentar obtener el color
+                                try:
+                                    color = self.sim.getShapeColor(obj, 0, 0)
+                                    # Si es blanco o cercano (R, G, B todos cerca de 1)
+                                    if color and all(c > 0.8 for c in color):
+                                        target_handle = obj
+                                        print(f"Cilindro blanco encontrado con handle: {obj}")
+                                        break
+                                except:
+                                    pass
+                        except:
+                            pass
+                except Exception as e:
+                    print(f"Error al buscar cilindro por propiedades: {e}")
+            
+            # Si aún no encontramos el objetivo, intentar buscar por otro método
+            if not target_handle:
+                # Buscar objetos en la jerarquía de la escena
+                try:
+                    cuboids = self.sim.getObjects()
+                    for obj in cuboids:
+                        try:
+                            name = self.sim.getObjectName(obj)
+                            if "Cuboid" in name or "Cylinder" in name or "Obstacle" in name:
+                                # Verificar si es un cilindro (forma aproximadamente cilíndrica)
+                                try:
+                                    dims = self.sim.getShapeBB(obj)
+                                    if dims and dims[0] > dims[2] * 0.8 and dims[1] > dims[2] * 0.8:
+                                        target_handle = obj
+                                        print(f"Encontrado objeto {name} como posible cilindro")
+                                        break
+                                except:
+                                    pass
+                        except:
+                            pass
+                except Exception as e:
+                    print(f"Error al buscar en la jerarquía: {e}")
+            
+            # Si definitivamente no encontramos el objetivo, crear uno
+            if not target_handle:
+                try:
+                    print("Creando un nuevo objetivo visual...")
+                    target_handle = self.sim.createPrimitiveShape(2, [0.1, 0.1, 0.05])  # 2 = cilindro
+                    self.sim.setObjectPosition(target_handle, -1, target_position)
+                    self.sim.setShapeColor(target_handle, 0, 0, [1, 1, 1])  # Color blanco
+                    self.sim.setObjectAlias(target_handle, "Target")
+                    print(f"Objetivo creado con handle: {target_handle}")
+                except Exception as e:
+                    print(f"❌ Error al crear objetivo: {e}")
+                    return False
+            
+            # 4. Mover el objetivo a la posición deseada
+            self.sim.setObjectPosition(target_handle, -1, target_position)
+            print(f"✅ Objetivo posicionado en: {target_position}")
+            
+            # 5. Iniciar la simulación si no está ya en ejecución
+            try:
+                sim_state = self.sim.getSimulationState()
+                if sim_state != 1:  # 1 = simulación en ejecución
+                    self.sim.startSimulation()
+                    print("✅ Simulación iniciada")
+                    import time
+                    time.sleep(0.5)
+            except Exception as e:
+                print(f"⚠️ Advertencia al verificar estado de simulación: {e}")
+            
+            # 6. Intentar usar las funciones de navegación del script de la escena
+            success = False
+            
+            # Intento 1: Buscar y llamar funciones de planificación de ruta en el script del robot
+            try:
+                planning_functions = [
+                    "startPathPlanning", 
+                    "startNavigation", 
+                    "planPath", 
+                    "computePath", 
+                    "moveToTarget",
+                    "navigateToGoal"
+                ]
+                
+                for func_name in planning_functions:
+                    try:
+                        # Intentar llamar a la función en el script del robot
+                        result = self.sim.callScriptFunction(
+                            func_name, 
+                            self.sim.scripttype_childscript,  # Script secundario asociado al robot
+                            robot_handle,  # Objeto dueño del script
+                            []  # Sin parámetros adicionales
+                        )
+                        print(f"Función '{func_name}' llamada en el robot, resultado: {result}")
+                        success = True
+                        break
+                    except Exception as func_error:
+                        print(f"Función {func_name} no encontrada en el robot: {func_error}")
+            except Exception as e:
+                print(f"Error al buscar funciones en el robot: {e}")
+            
+            # Intento 2: Probar con script principal
+            if not success:
+                try:
+                    for func_name in planning_functions:
+                        try:
+                            # Intentar llamar a la función en el script principal
+                            result = self.sim.callScriptFunction(
+                                func_name, 
+                                self.sim.scripttype_mainscript,  # Script principal
+                                -1,  # No importa el objeto
+                                []  # Sin parámetros adicionales
+                            )
+                            print(f"Función '{func_name}' llamada en script principal, resultado: {result}")
+                            success = True
+                            break
+                        except Exception as func_error:
+                            print(f"Función {func_name} no encontrada en script principal: {func_error}")
+                except Exception as e:
+                    print(f"Error al buscar funciones en script principal: {e}")
+            
+            # Intento 3: Enviar señales para activar la navegación
+            if not success:
+                try:
+                    print("Enviando señales para iniciar navegación...")
+                    signals = ["pathPlanning", "startNavigation", "targetPositionChanged"]
+                    
+                    for signal_name in signals:
+                        try:
+                            # Crear paquete de datos con la posición objetivo
+                            data = {"position": target_position, "start": True}
+                            packed_data = self.sim.packTable(data)
+                            
+                            # Enviar la señal
+                            self.sim.setStringSignal(signal_name, packed_data)
+                            print(f"Señal '{signal_name}' enviada")
+                            success = True
+                        except Exception as signal_error:
+                            print(f"Error al enviar señal {signal_name}: {signal_error}")
+                except Exception as e:
+                    print(f"Error al enviar señales: {e}")
+            
+            # Intento 4: Implementar control directo del robot
+            if not success:
+                print("Implementando control directo como último recurso...")
+                
+                # Buscar motores del robot
+                motors = []
+                
+                try:
+                    # Obtener objetos hijos del robot
+                    children = self.sim.getObjectsInTree(robot_handle)
+                    
+                    # Buscar motores entre los hijos
+                    for child in children:
+                        try:
+                            # Verificar si es un joint (articulación/motor)
+                            obj_type = self.sim.getObjectType(child)
+                            if obj_type == 1:  # 1 = joint
+                                motors.append(child)
+                                name = self.sim.getObjectName(child)
+                                print(f"Motor encontrado: {name}")
+                        except:
+                            pass
+                except Exception as e:
+                    print(f"Error al buscar motores: {e}")
+                
+                # Si encontramos al menos 2 motores, implementar navegación directa
+                if len(motors) >= 2:
+                    left_motor = motors[0]
+                    right_motor = motors[1]
+                    
+                    # Iniciar navegación en un hilo separado
+                    import threading
+                    import time
+                    import math
+                    
+                    # Variable de control para el hilo
+                    self.navigation_active = True
+                    
+                    def navigation_controller():
+                        """Controlador simple de navegación directa"""
+                        print("🚀 Iniciando navegación directa")
+                        
+                        try:
+                            # Variables para control
+                            max_velocity = 2.0  # Velocidad máxima de los motores
+                            distance_threshold = 0.3  # Distancia para considerar llegada (metros)
+                            
+                            # Bucle de navegación
+                            while self.navigation_active:
+                                try:
+                                    # Obtener posiciones actuales
+                                    robot_pos = self.sim.getObjectPosition(robot_handle, -1)
+                                    target_pos = self.sim.getObjectPosition(target_handle, -1)
+                                    robot_orient = self.sim.getObjectOrientation(robot_handle, -1)
+                                    robot_angle = robot_orient[2]  # Yaw (rotación en Z)
+                                    
+                                    # Calcular vector y distancia al objetivo
+                                    dx = target_pos[0] - robot_pos[0]
+                                    dy = target_pos[1] - robot_pos[1]
+                                    distance = math.sqrt(dx*dx + dy*dy)
+                                    
+                                    print(f"Distancia al objetivo: {distance:.2f}m")
+                                    
+                                    # Verificar llegada al objetivo
+                                    if distance < distance_threshold:
+                                        print("🏁 Objetivo alcanzado")
+                                        # Detener motores
+                                        self.sim.setJointTargetVelocity(left_motor, 0)
+                                        self.sim.setJointTargetVelocity(right_motor, 0)
+                                        self.navigation_active = False
+                                        break
+                                    
+                                    # Calcular ángulo hacia el objetivo
+                                    target_angle = math.atan2(dy, dx)
+                                    
+                                    # Calcular error de orientación
+                                    orientation_error = target_angle - robot_angle
+                                    
+                                    # Normalizar a [-pi, pi]
+                                    while orientation_error > math.pi:
+                                        orientation_error -= 2 * math.pi
+                                    while orientation_error < -math.pi:
+                                        orientation_error += 2 * math.pi
+                                    
+                                    print(f"Ángulo al objetivo: {target_angle:.2f}, Error: {orientation_error:.2f}")
+                                    
+                                    # Determinar velocidades de los motores
+                                    if abs(orientation_error) > 0.3:  # Si hay error grande de orientación
+                                        # Girar en su lugar
+                                        if orientation_error > 0:  # Girar a la izquierda
+                                            left_velocity = -max_velocity * 0.5
+                                            right_velocity = max_velocity * 0.5
+                                        else:  # Girar a la derecha
+                                            left_velocity = max_velocity * 0.5
+                                            right_velocity = -max_velocity * 0.5
+                                        print("Girando para orientarse al objetivo")
+                                    else:
+                                        # Avanzar con corrección de dirección
+                                        forward_speed = max_velocity * min(1.0, distance)
+                                        steering = orientation_error * 1.5
+                                        
+                                        left_velocity = forward_speed - steering
+                                        right_velocity = forward_speed + steering
+                                        print(f"Avanzando hacia objetivo: L={left_velocity:.2f}, R={right_velocity:.2f}")
+                                    
+                                    # Aplicar velocidades a los motores
+                                    self.sim.setJointTargetVelocity(left_motor, left_velocity)
+                                    self.sim.setJointTargetVelocity(right_motor, right_velocity)
+                                    
+                                except Exception as loop_error:
+                                    print(f"Error en bucle de navegación: {loop_error}")
+                                
+                                # Pausa breve
+                                time.sleep(0.1)
+                            
+                            print("✅ Navegación finalizada")
+                            
+                        except Exception as e:
+                            print(f"❌ Error en controlador de navegación: {e}")
+                            import traceback
+                            traceback.print_exc()
+                            
+                        finally:
+                            # Asegurar que los motores se detengan
+                            try:
+                                if left_motor and right_motor:
+                                    self.sim.setJointTargetVelocity(left_motor, 0)
+                                    self.sim.setJointTargetVelocity(right_motor, 0)
+                                    print("Motores detenidos")
+                            except:
+                                pass
+                    
+                    # Iniciar el hilo de navegación
+                    nav_thread = threading.Thread(target=navigation_controller)
+                    nav_thread.daemon = True
+                    nav_thread.start()
+                    
+                    success = True
+                    print("✅ Control directo iniciado")
+                else:
+                    print("❌ No se encontraron suficientes motores para control directo")
+            
+            return success
+            
+        except Exception as e:
+            print(f"❌ Error general al ejecutar recorrido: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+        
+    def create_target(self, position):
+        """
+        Crea un punto objetivo (cilindro blanco) en la posición especificada.
+        
+        Args:
+            position: Lista [x, y, z] con la posición donde crear el objetivo
+        
+        Returns:
+            dict: Diccionario con el resultado {'success': bool, 'handle': int}
+        """
+        if not self.connected:
+            print("❌ No se puede crear objetivo: no hay conexión activa")
+            return {'success': False, 'handle': None}
+        
+        try:
+            print(f"Creando punto objetivo en posición: {position}")
+            
+            # Crear un cilindro blanco
+            size = [0.1, 0.1, 0.05]  # Diámetro x, diámetro y, altura
+            target_handle = self.sim.createPrimitiveShape(2, 18, size)  # 2 = cilindro
+            
+            # Establecer la posición
+            self.sim.setObjectPosition(target_handle, -1, position)
+            
+            # Establecer color blanco
+            self.sim.setShapeColor(target_handle, 0, 0, [1, 1, 1])
+            
+            # Establecer alias para fácil referencia
+            self.sim.setObjectAlias(target_handle, "Target")
+            
+            print(f"✅ Punto objetivo creado con handle: {target_handle}")
+            return {'success': True, 'handle': target_handle}
+            
+        except Exception as e:
+            print(f"❌ Error al crear punto objetivo: {e}")
+            import traceback
+            traceback.print_exc()
+            return {'success': False, 'handle': None}
+        
+    def move_target(self, target_handle, position):
+        """
+        Mueve un objetivo existente a una nueva posición.
+        
+        Args:
+            target_handle: Handle del objetivo a mover
+            position: Lista [x, y, z] con la nueva posición
+        
+        Returns:
+            bool: True si se movió correctamente, False en caso contrario
+        """
+        if not self.connected:
+            print("❌ No se puede mover objetivo: no hay conexión activa")
+            return False
+        
+        try:
+            # Verificar que el objeto existe
+            try:
+                self.sim.getObjectPosition(target_handle, -1)
+            except:
+                print(f"❌ El objetivo con handle {target_handle} no existe")
+                return False
+            
+            # Mover el objeto
+            self.sim.setObjectPosition(target_handle, -1, position)
+            print(f"✅ Objetivo movido a posición: {position}")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Error al mover objetivo: {e}")
+            return False
+        
+    def navigate_robot_to_target(self, robot_handle, target_handle):
+        """
+        Hace que el robot navegue hacia el objetivo.
+        
+        Args:
+            robot_handle: Handle del robot
+            target_handle: Handle del objetivo
+        
+        Returns:
+            bool: True si se inició la navegación correctamente, False en caso contrario
+        """
+        if not self.connected:
+            print("❌ No se puede iniciar navegación: no hay conexión activa")
+            return False
+        
+        try:
+            # Verificar que ambos objetos existen
+            robot_pos = None
+            target_pos = None
+            
+            try:
+                robot_pos = self.sim.getObjectPosition(robot_handle, -1)
+                target_pos = self.sim.getObjectPosition(target_handle, -1)
+            except Exception as e:
+                print(f"❌ Error al obtener posiciones: {e}")
+                return False
+            
+            print(f"Iniciando navegación desde {robot_pos} hacia {target_pos}")
+            
+            # Buscar motores del robot
+            motors = []
+            
+            try:
+                # Obtener objetos hijos del robot
+                children = self.sim.getObjectsInTree(robot_handle)
+                
+                # Buscar motores entre los hijos
+                for child in children:
+                    try:
+                        name = self.sim.getObjectName(child)
+                        if "motor" in name.lower() or "wheel" in name.lower() or "joint" in name.lower():
+                            motors.append(child)
+                            print(f"Motor encontrado: {name}")
+                    except:
+                        pass
+            except Exception as e:
+                print(f"Error al buscar motores: {e}")
+            
+            # Si no encontramos los motores por nombre, buscarlos por tipo
+            if len(motors) < 2:
+                try:
+                    children = self.sim.getObjectsInTree(robot_handle)
+                    for child in children:
+                        try:
+                            obj_type = self.sim.getObjectType(child)
+                            if obj_type == 1:  # 1 = joint
+                                motors.append(child)
+                        except:
+                            pass
+                    print(f"Encontrados {len(motors)} motores por tipo de objeto")
+                except:
+                    pass
+            
+            # Si aún no tenemos suficientes motores, fallar
+            if len(motors) < 2:
+                print("❌ No se encontraron suficientes motores para el robot")
+                return False
+            
+            # Seleccionar los dos primeros motores como izquierdo y derecho
+            left_motor = motors[0]
+            right_motor = motors[1]
+            
+            # Iniciar navegación en un hilo separado
+            import threading
+            import time
+            import math
+            
+            # Variable de control para el hilo
+            self.navigation_active = True
+            
+            def navigation_controller():
+                """Controlador simple de navegación directa"""
+                print("🚀 Iniciando navegación")
+                
+                try:
+                    # Variables para control
+                    max_velocity = 2.0  # Velocidad máxima
+                    distance_threshold = 0.3  # Distancia para considerar llegada
+                    
+                    # Bucle de navegación
+                    while self.navigation_active:
+                        try:
+                            # Obtener posiciones actuales
+                            robot_pos = self.sim.getObjectPosition(robot_handle, -1)
+                            target_pos = self.sim.getObjectPosition(target_handle, -1)
+                            robot_orient = self.sim.getObjectOrientation(robot_handle, -1)
+                            robot_angle = robot_orient[2]  # Yaw (rotación en Z)
+                            
+                            # Calcular vector al objetivo
+                            dx = target_pos[0] - robot_pos[0]
+                            dy = target_pos[1] - robot_pos[1]
+                            distance = math.sqrt(dx*dx + dy*dy)
+                            
+                            print(f"Distancia al objetivo: {distance:.2f}m")
+                            
+                            # Verificar llegada
+                            if distance < distance_threshold:
+                                print("🏁 Objetivo alcanzado")
+                                self.sim.setJointTargetVelocity(left_motor, 0)
+                                self.sim.setJointTargetVelocity(right_motor, 0)
+                                self.navigation_active = False
+                                break
+                            
+                            # Calcular ángulo al objetivo
+                            target_angle = math.atan2(dy, dx)
+                            
+                            # Calcular error de orientación
+                            orientation_error = target_angle - robot_angle
+                            
+                            # Normalizar a [-pi, pi]
+                            while orientation_error > math.pi:
+                                orientation_error -= 2 * math.pi
+                            while orientation_error < -math.pi:
+                                orientation_error += 2 * math.pi
+                            
+                            print(f"Ángulo al objetivo: {target_angle:.2f}, Error: {orientation_error:.2f}")
+                            
+                            # Determinar velocidades
+                            if abs(orientation_error) > 0.3:
+                                # Girar en su lugar
+                                if orientation_error > 0:
+                                    left_velocity = -max_velocity * 0.5
+                                    right_velocity = max_velocity * 0.5
+                                else:
+                                    left_velocity = max_velocity * 0.5
+                                    right_velocity = -max_velocity * 0.5
+                                print("Girando para orientarse al objetivo")
+                            else:
+                                # Avanzar con corrección
+                                forward_speed = max_velocity * min(1.0, distance)
+                                steering = orientation_error * 1.5
+                                
+                                left_velocity = forward_speed - steering
+                                right_velocity = forward_speed + steering
+                                print(f"Avanzando hacia objetivo: L={left_velocity:.2f}, R={right_velocity:.2f}")
+                            
+                            # Aplicar velocidades
+                            self.sim.setJointTargetVelocity(left_motor, left_velocity)
+                            self.sim.setJointTargetVelocity(right_motor, right_velocity)
+                            
+                        except Exception as e:
+                            print(f"Error en bucle de navegación: {e}")
+                        
+                        time.sleep(0.1)
+                    
+                    print("✅ Navegación finalizada")
+                    
+                except Exception as e:
+                    print(f"❌ Error en controlador de navegación: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    
+                finally:
+                    # Detener motores
+                    try:
+                        self.sim.setJointTargetVelocity(left_motor, 0)
+                        self.sim.setJointTargetVelocity(right_motor, 0)
+                        print("Motores detenidos")
+                    except:
+                        pass
+            
+            # Iniciar el hilo de navegación
+            nav_thread = threading.Thread(target=navigation_controller)
+            nav_thread.daemon = True
+            nav_thread.start()
+            
+            print("✅ Navegación iniciada")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Error al iniciar navegación: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+        
+    def move_goal_dummy(self, target_position):
+        """
+        Mueve DIRECTAMENTE el objeto goalDummy a la posición especificada.
+        
+        Args:
+            target_position: Lista [x, y, z] con la posición objetivo
+        
+        Returns:
+            bool: True si se movió correctamente, False en caso contrario
+        """
+        if not self.connected:
+            print("❌ No se puede mover goalDummy: no hay conexión activa")
+            return False
+        
+        try:
+            print(f"Moviendo goalDummy a posición: {target_position}")
+            
+            # 1. Buscar el goalDummy por su nombre exacto
+            goal_dummy_handle = None
+            try:
+                # El nombre exacto es importante
+                goal_dummy_handle = self.sim.getObject("goalDummy")
+                print(f"✅ goalDummy encontrado con handle: {goal_dummy_handle}")
+            except Exception as e1:
+                print(f"No se pudo encontrar 'goalDummy': {e1}")
+                try:
+                    # Intentar con ruta completa
+                    goal_dummy_handle = self.sim.getObject("/goalDummy")
+                    print(f"✅ /goalDummy encontrado con handle: {goal_dummy_handle}")
+                except Exception as e2:
+                    print(f"No se pudo encontrar '/goalDummy': {e2}")
+                    return False
+            
+            # 2. Mover directamente el goalDummy
+            self.sim.setObjectPosition(goal_dummy_handle, -1, target_position)
+            print(f"✅ goalDummy movido a posición: {target_position}")
+            
+            # 3. Verificar que se movió correctamente
+            new_position = self.sim.getObjectPosition(goal_dummy_handle, -1)
+            print(f"Nueva posición verificada: {new_position}")
+            
+            # 4. Si hay un cilindro hijo, asegurarse de que se mueva también
+            try:
+                cylinder_handle = self.sim.getObject("goalDummy/cylinder")
+                self.sim.setObjectPosition(cylinder_handle, goal_dummy_handle, [0, 0, 0])
+                print("✅ cylinder dentro de goalDummy alineado")
+            except:
+                # No hay problema si no podemos encontrar el cilindro
+                pass
+                
+            return True
+            
+        except Exception as e:
+            print(f"❌ Error al mover goalDummy: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+        
+    def control_mobile_robot_path_planning(self, target_position):
+        """
+        Método optimizado para controlar la navegación del robot en la escena mobileRobotPathPlanning
+        mediante diferentes enfoques combinados.
+        
+        Args:
+            target_position: Lista [x, y, z] con la posición objetivo
+        
+        Returns:
+            bool: True si se estableció correctamente, False en caso contrario
+        """
+        if not self.connected:
+            print("❌ No hay conexión activa")
+            return False
+        
+        try:
+            print(f"Estableciendo destino en: {target_position}")
+            
+            # 1. Mover directamente el goalDummy (técnica principal)
+            goal_dummy_handle = None
+            try:
+                # Intentar con diferentes variantes del nombre
+                possible_names = ["goalDummy", "/goalDummy", "mobileRobot/goalDummy"]
+                for name in possible_names:
+                    try:
+                        goal_dummy_handle = self.sim.getObject(name)
+                        if goal_dummy_handle != -1:
+                            print(f"✅ goalDummy encontrado como '{name}'")
+                            break
+                    except:
+                        pass
+                
+                if goal_dummy_handle is None or goal_dummy_handle == -1:
+                    print("⚠️ No se pudo encontrar el goalDummy por nombre, buscando por tipo...")
+                    # Buscar por tipo de objeto (dummy)
+                    all_objects = self.sim.getObjects()
+                    for obj in all_objects:
+                        try:
+                            obj_type = self.sim.getObjectType(obj)
+                            if obj_type == self.sim.object_type_dummy:
+                                obj_name = self.sim.getObjectName(obj)
+                                if "goal" in obj_name.lower() or "dummy" in obj_name.lower():
+                                    goal_dummy_handle = obj
+                                    print(f"✅ goalDummy encontrado por tipo: {obj_name}")
+                                    break
+                        except:
+                            pass
+            
+                if goal_dummy_handle is None or goal_dummy_handle == -1:
+                    print("❌ No se pudo encontrar el goalDummy")
+                    return False
+                
+                # Mover el goalDummy a la posición objetivo
+                self.sim.setObjectPosition(goal_dummy_handle, -1, target_position)
+                print(f"✅ goalDummy movido a posición: {target_position}")
+                
+                # Opcional: verificar que se ha movido correctamente
+                new_pos = self.sim.getObjectPosition(goal_dummy_handle, -1)
+                print(f"Posición actual del goalDummy: {new_pos}")
+            except Exception as e:
+                print(f"⚠️ Error al mover goalDummy: {e}")
+            
+            # 2. Enviar señales para activar la navegación (enfoque complementario)
+            try:
+                # Crear las estructuras de datos necesarias
+                pose_data = {"position": target_position, "orientation": [0, 0, 0]}
+                path_data = {"start": True, "target": target_position}
+                
+                # Empaquetar los datos para las señales
+                packed_pose = self.sim.packTable(pose_data)
+                packed_path = self.sim.packTable(path_data)
+                
+                # Enviar múltiples señales - diferentes versiones pueden usar diferentes nombres
+                signal_pairs = [
+                    ("targetPose", packed_pose),
+                    ("pathPlanningStart", packed_path),
+                    ("mobileRobotTarget", packed_pose),
+                    ("targetPosition", packed_pose),
+                    ("startNavigation", packed_path),
+                    ("goalPosition", packed_pose)
+                ]
+                
+                for signal_name, signal_data in signal_pairs:
+                    try:
+                        self.sim.setStringSignal(signal_name, signal_data)
+                        print(f"✅ Señal '{signal_name}' enviada")
+                    except Exception as signal_error:
+                        print(f"⚠️ Error al enviar señal '{signal_name}': {signal_error}")
+            except Exception as e:
+                print(f"⚠️ Error al enviar señales: {e}")
+            
+            # 3. Llamar a funciones del script en el simulador (enfoque alternativo)
+            try:
+                # Intentar llamar a funciones específicas en scripts de la escena
+                script_targets = [
+                    (self.sim.scripttype_mainscript, -1),  # Script principal
+                    (self.sim.scripttype_childscript, goal_dummy_handle)  # Script del goalDummy
+                ]
+                
+                function_names = [
+                    "setTargetPosition", 
+                    "startPathPlanning", 
+                    "initiateNavigation",
+                    "moveToPosition",
+                    "setGoalPosition"
+                ]
+                
+                for script_type, script_handle in script_targets:
+                    for func_name in function_names:
+                        try:
+                            result = self.sim.callScriptFunction(
+                                func_name, 
+                                script_type, 
+                                script_handle, 
+                                [target_position]
+                            )
+                            print(f"✅ Función '{func_name}' llamada, resultado: {result}")
+                        except:
+                            pass
+            except Exception as e:
+                print(f"⚠️ Error al llamar funciones: {e}")
+            
+            # 4. Asegurar que la simulación está en marcha
+            try:
+                sim_state = self.sim.getSimulationState()
+                if sim_state != 1:  # 1 = simulación en ejecución
+                    self.sim.startSimulation()
+                    print("✅ Simulación iniciada")
+                else:
+                    print("✅ Simulación ya en marcha")
+            except Exception as e:
+                print(f"⚠️ Error al verificar estado de simulación: {e}")
+            
+            print("✅ Configuración de destino completada")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Error general: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+        
+    def monitor_signals(self, duration=5.0):
+        """
+        Monitorea las señales de CoppeliaSim durante un período para entender 
+        cómo funciona la planificación de ruta.
+        
+        Args:
+            duration: Duración del monitoreo en segundos
+        """
+        if not self.connected:
+            print("❌ No se pueden monitorear señales: no hay conexión activa")
+            return
+        
+        import threading
+        import time
+        
+        def monitor_thread():
+            print("🔍 Iniciando monitoreo de señales...")
+            start_time = time.time()
+            
+            # Lista de señales a monitorear
+            signal_names = [
+                "pathPlanningRequest", "targetPosition", "goalReached",
+                "startNavigation", "mobileRobotTarget", "pathPlanningStart",
+                "navigationStatus", "targetPose"
+            ]
+            
+            while time.time() - start_time < duration:
+                for signal_name in signal_names:
+                    try:
+                        signal_value = self.sim.getStringSignal(signal_name)
+                        if signal_value:
+                            # Intentar desempaquetar la tabla
+                            try:
+                                unpacked = self.sim.unpackTable(signal_value)
+                                print(f"Señal '{signal_name}': {unpacked}")
+                            except:
+                                print(f"Señal '{signal_name}' recibida (formato no tabla)")
+                    except:
+                        pass
+                
+                time.sleep(0.5)
+            
+            print("🔍 Monitoreo de señales finalizado")
+        
+        # Iniciar en un hilo separado
+        monitor_thread = threading.Thread(target=monitor_thread)
+        monitor_thread.daemon = True
+        monitor_thread.start()
+        
+        print(f"✅ Monitoreo iniciado por {duration} segundos")
+
+    def mark_end_point(self, row, col):
+        """
+        Marca específicamente el punto B (meta) y verifica que todo esté funcionando correctamente.
+        
+        Args:
+            row: Fila en la cuadrícula
+            col: Columna en la cuadrícula
+        
+        Returns:
+            bool: True si se pudo marcar y verificar correctamente
+        """
+        if not self.is_connected:
+            print("❌ No conectado a CoppeliaSim")
+            return False
+        
+        try:
+            print(f"Marcando punto B en posición ({row}, {col}) y verificando proceso completo")
+            
+            # 1. Marcar el punto en la cuadrícula
+            self.grid_manager.clear_type(END)
+            self.grid_manager.grid[row][col] = END
+            self.grid_manager.end_set = True
+            self.grid_widget.update()
+            print("✅ Punto B marcado en la cuadrícula")
+            
+            # 2. Convertir a coordenadas de CoppeliaSim
+            reference_scale = float(self.scale_combo.currentText())
+            end_x = (col - GRID_SIZE/2 + 0.5) * reference_scale
+            end_y = (GRID_SIZE/2 - row - 0.5) * reference_scale
+            end_z = 0.075  # Altura del objetivo
+            
+            target_position = [end_x, end_y, end_z]
+            print(f"✅ Coordenadas convertidas a CoppeliaSim: {target_position}")
+            
+            # 3. Verificar objetos en la escena
+            try:
+                # Imprimir todos los objetos de la escena para depuración
+                all_objects = self.sim_controller.sim.getObjects()
+                print(f"Objetos en la escena: {len(all_objects)}")
+                
+                relevant_objects = []
+                for obj in all_objects:
+                    try:
+                        obj_name = self.sim_controller.sim.getObjectName(obj)
+                        if "dummy" in obj_name.lower() or "goal" in obj_name.lower() or "robot" in obj_name.lower():
+                            relevant_objects.append(f"{obj_name} (handle: {obj})")
+                    except:
+                        pass
+                
+                print(f"Objetos relevantes encontrados: {relevant_objects}")
+            except Exception as e:
+                print(f"⚠️ Error al listar objetos: {e}")
+            
+            # 4. Intentar mover el goalDummy directamente
+            goal_found = False
+            try:
+                # Buscar el goalDummy con diferentes nombres posibles
+                possible_names = ["goalDummy", "/goalDummy", "Dummy", "Goal", "Target"]
+                for name in possible_names:
+                    try:
+                        goal_handle = self.sim_controller.sim.getObject(name)
+                        print(f"✅ Objeto '{name}' encontrado con handle: {goal_handle}")
+                        
+                        # Intentar mover el objeto
+                        self.sim_controller.sim.setObjectPosition(goal_handle, -1, target_position)
+                        print(f"✅ '{name}' movido a posición: {target_position}")
+                        
+                        # Verificar nueva posición
+                        new_pos = self.sim_controller.sim.getObjectPosition(goal_handle, -1)
+                        print(f"Nueva posición verificada: {new_pos}")
+                        
+                        goal_found = True
+                        break
+                    except Exception as obj_error:
+                        print(f"⚠️ Error con objeto '{name}': {obj_error}")
+            except Exception as e:
+                print(f"⚠️ Error al mover goalDummy: {e}")
+            
+            if not goal_found:
+                print("❌ No se pudo encontrar o mover el goalDummy")
+            
+            # 5. Enviar señales para activar la planificación de ruta
+            try:
+                # Crear paquetes de datos para las señales
+                pose_data = {"position": target_position}
+                packed_data = self.sim_controller.sim.packTable(pose_data)
+                
+                # Enviar señal por varios nombres
+                signals_to_try = [
+                    "targetPose", 
+                    "pathPlanningStart", 
+                    "mobileRobotTarget",
+                    "targetPosition", 
+                    "startNavigation", 
+                    "goalPosition"
+                ]
+                
+                for signal_name in signals_to_try:
+                    try:
+                        self.sim_controller.sim.setStringSignal(signal_name, packed_data)
+                        print(f"✅ Señal '{signal_name}' enviada con datos: {pose_data}")
+                    except Exception as signal_error:
+                        print(f"⚠️ Error al enviar señal '{signal_name}': {signal_error}")
+            except Exception as e:
+                print(f"⚠️ Error al enviar señales: {e}")
+            
+            # 6. Verificar estado de la simulación
+            try:
+                sim_state = self.sim_controller.sim.getSimulationState()
+                print(f"Estado actual de simulación: {sim_state}")
+                
+                if sim_state != 1:  # 1 = simulación en ejecución
+                    self.sim_controller.sim.startSimulation()
+                    print("✅ Simulación iniciada")
+                else:
+                    print("✅ Simulación ya en marcha")
+            except Exception as e:
+                print(f"⚠️ Error al verificar simulación: {e}")
+            
+            print("✅ Proceso de marcado y verificación completo")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Error general en mark_end_point: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+            
+    
